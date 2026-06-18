@@ -66,5 +66,7 @@ def train_gwent(num_episodes: int = 1000):
             agent.update_target_network()
             print(f"Episode {episode}/{num_episodes} | epsilon: {agent.epsilon:.3f}")
 
+    agent.save("models/gwent_agent.pth")
+
 if __name__ == "__main__":
     train_gwent()
