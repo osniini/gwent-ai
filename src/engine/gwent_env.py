@@ -49,6 +49,23 @@ class GwentEnv:
         
         return self._get_state()
 
+    def get_legal_actions(self) -> np.ndarray:
+        """Return a True/False list of legal actions for the current player."""
+        active_hand = self.hand1 if self.current_player == 1 else self.hand2
+        active_board = self.board.player1 if self.current_player == 1 else self.board.player2
+
+        mask = np.zeros(self.action_size, dtype=bool)
+
+        if active_board.passed:
+            return mask
+        
+        for i in range(len(active_hand)):
+            mask[i] = True
+        
+        mask[8] = True
+
+        return mask
+
     def step(self, action: int):
         """Execute single action: 0-7 play a card from hand, 8 pass."""
 
@@ -62,7 +79,7 @@ class GwentEnv:
                 card = active_hand.pop(action)
                 self.board.place_card(self.current_player, card)
             else:
-                active_board.passed = True
+                raise ValueError(f"Invalid action: {action}")
         
         if self.board.player1.passed and self.board.player2.passed:
             self._check_round_end()
