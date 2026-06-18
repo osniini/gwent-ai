@@ -1,0 +1,230 @@
+import numpy as np
+import customtkinter as ctk
+from src.ai.agent import DQNAgent
+from src.engine.gwent_env import GwentEnv
+from src.gui.widgets import (
+    BoardWidget,
+    BOTTOM_ROW_ORDER,
+    HandWidget,
+    PlayerWidget,
+    TOP_ROW_ORDER,
+)
+
+ctk.set_appearance_mode("dark")
+
+
+class GwentApp(ctk.CTk):
+    def __init__(self):
+        super().__init__()
+
+        self.env = GwentEnv()
+        self.env.reset()
+        self.game_over = False
+        self.round_paused = False
+        self._ai_job = None
+        self._round_continue_job = None
+
+        self.agent = DQNAgent(self.env.state_size, self.env.action_size)
+        self.agent.load("models/gwent_agent_alpha.pth")
+        self.agent.epsilon = 0  # no random exploration in the GUI
+
+        self.title("Gwent")
+        self.geometry("1000x750")
+        self.resizable(False, False)
+
+        self.build_ui()
+        self.refresh()
+
+    def refresh(self):
+        p1_score = self.env.board.player1.get_total_score()
+        p2_score = self.env.board.player2.get_total_score()
+        if p1_score > p2_score:
+            p1_leading, p2_leading = True, False
+        elif p2_score > p1_score:
+            p1_leading, p2_leading = False, True
+        else:
+            p1_leading = p2_leading = None
+
+        self.opponent_player.update(
+            self.env.board.player2,
+            self.env.round_wins[1],
+            hand_count=len(self.env.hand2),
+            power_leading=p2_leading,
+        )
+        self.player_player.update(
+            self.env.board.player1,
+            self.env.round_wins[0],
+            hand_count=len(self.env.hand1),
+            power_leading=p1_leading,
+        )
+        self.opponent_board.update(self.env.board.player2)
+        self.player_board.update(self.env.board.player1)
+
+        can_act = (
+            self.env.current_player == 1
+            and not self.game_over
+            and not self.round_paused
+        )
+        legal = self.env.get_legal_actions() if can_act else np.zeros(self.env.action_size, dtype=bool)
+
+        self.player_hand.update(
+            self.env.hand1,
+            on_click=self.on_play_card if can_act else None,
+            legal=legal,
+            on_pass=self.on_pass if can_act else None,
+        )
+
+        if self.env.current_player == 2 and not self.game_over and not self.round_paused:
+            self._schedule_ai_turn()
+
+    def _schedule_ai_turn(self):
+        if self._ai_job is not None:
+            self.after_cancel(self._ai_job)
+        self._ai_job = self.after(400, self.ai_turn)
+
+    def ai_turn(self):
+        self._ai_job = None
+
+        if self.game_over or self.round_paused or self.env.current_player != 2:
+            return
+
+        legal = self.env.get_legal_actions()
+        if not legal.any():
+            return
+
+        state = self.env._get_state()
+        action = self.agent.select_action(state, legal)
+        self._apply_action(action)
+
+    def _apply_action(self, action: int):
+        prev_round_wins = list(self.env.round_wins)
+        _, _, done = self.env.step(action)
+        self._on_step_complete(prev_round_wins, done)
+        self.refresh()
+
+    def _on_step_complete(self, prev_round_wins: list[int], done: bool):
+        round_changed = self.env.round_wins != prev_round_wins
+
+        if done:
+            self.game_over = True
+            self._show_overlay(self._game_over_message(), show_new_game=True)
+        elif round_changed:
+            self.round_paused = True
+            self._show_overlay(self._round_end_message(prev_round_wins), show_new_game=False)
+            if self._round_continue_job is not None:
+                self.after_cancel(self._round_continue_job)
+            self._round_continue_job = self.after(2000, self._continue_round)
+
+    def _round_end_message(self, prev_round_wins: list[int]) -> str:
+        p1_gain = self.env.round_wins[0] - prev_round_wins[0]
+        p2_gain = self.env.round_wins[1] - prev_round_wins[1]
+        if p1_gain and p2_gain:
+            return "Round tied — both players take a round win."
+        if p1_gain:
+            return "You won the round!"
+        return "Opponent won the round."
+
+    def _game_over_message(self) -> str:
+        if self.env.round_wins[0] >= 2:
+            return "You win the match!"
+        if self.env.round_wins[1] >= 2:
+            return "Opponent wins the match!"
+        if self.env.round_wins[0] > self.env.round_wins[1]:
+            return "You win the match!"
+        if self.env.round_wins[1] > self.env.round_wins[0]:
+            return "Opponent wins the match!"
+        return "Match drawn."
+
+    def _show_overlay(self, message: str, *, show_new_game: bool):
+        self.overlay_message.configure(text=message)
+        if show_new_game:
+            self.continue_btn.pack_forget()
+            self.new_game_btn.pack(pady=(8, 0))
+        else:
+            self.new_game_btn.pack_forget()
+            self.continue_btn.pack(pady=(8, 0))
+        self.overlay.place(relx=0.5, rely=0.5, anchor="center")
+
+    def _hide_overlay(self):
+        self.overlay.place_forget()
+
+    def _continue_round(self):
+        if self._round_continue_job is not None:
+            self.after_cancel(self._round_continue_job)
+            self._round_continue_job = None
+        if not self.round_paused:
+            return
+        self.round_paused = False
+        self._hide_overlay()
+        self.refresh()
+
+    def new_game(self):
+        if self._ai_job is not None:
+            self.after_cancel(self._ai_job)
+            self._ai_job = None
+        if self._round_continue_job is not None:
+            self.after_cancel(self._round_continue_job)
+            self._round_continue_job = None
+
+        self.env.reset()
+        self.game_over = False
+        self.round_paused = False
+        self._hide_overlay()
+        self.refresh()
+
+    def build_ui(self):
+        container = ctk.CTkFrame(self, fg_color="transparent")
+        container.pack(fill="both", expand=True, padx=12, pady=10)
+
+        # Opponent
+        opponent_row = ctk.CTkFrame(container, fg_color="transparent")
+        opponent_row.pack(fill="x", pady=(0, 4))
+        self.opponent_player = PlayerWidget(opponent_row, "Opponent")
+        self.opponent_player.pack(side="left", padx=(0, 4))
+        self.opponent_board = BoardWidget(opponent_row, TOP_ROW_ORDER)
+        self.opponent_board.pack(side="left", fill="both", expand=True)
+
+        ctk.CTkFrame(container, height=1, fg_color="#666666").pack(fill="x", pady=2)
+
+        # Player
+        player_row = ctk.CTkFrame(container, fg_color="transparent")
+        player_row.pack(fill="x", pady=(4, 0))
+        self.player_player = PlayerWidget(player_row, "You")
+        self.player_player.pack(side="left", padx=(0, 4))
+        self.player_board = BoardWidget(player_row, BOTTOM_ROW_ORDER)
+        self.player_board.pack(side="left", fill="both", expand=True)
+
+        # Player hand
+        self.player_hand = HandWidget(container)
+        self.player_hand.pack(fill="x", pady=(8, 0))
+
+        self.overlay = ctk.CTkFrame(self, fg_color="#1a1a1a", corner_radius=8, border_width=1, border_color="#666666")
+        self.overlay_message = ctk.CTkLabel(
+            self.overlay,
+            text="",
+            font=ctk.CTkFont(size=18, weight="bold"),
+            wraplength=360,
+            justify="center",
+        )
+        self.overlay_message.pack(padx=24, pady=(20, 8))
+
+        self.continue_btn = ctk.CTkButton(self.overlay, text="Continue", width=120, command=self._continue_round)
+        self.new_game_btn = ctk.CTkButton(self.overlay, text="New Game", width=120, command=self.new_game)
+
+    def on_play_card(self, hand_index: int):
+        if self.game_over or self.round_paused or self.env.current_player != 1:
+            return
+
+        legal = self.env.get_legal_actions()
+        if hand_index >= len(legal) or not legal[hand_index]:
+            return
+
+        self._apply_action(hand_index)
+
+    def on_pass(self):
+        self.on_play_card(8)
+
+
+if __name__ == "__main__":
+    app = GwentApp()
+    app.mainloop()
