@@ -2,7 +2,7 @@ import numpy as np
 from src.engine.gwent_env import GwentEnv
 from src.ai.agent import DQNAgent
 
-def train_gwent(num_episodes: int = 1000):
+def train_gwent(num_episodes: int = 10000):
     env = GwentEnv()
 
     agent = DQNAgent(env.state_size, env.action_size)
@@ -62,11 +62,11 @@ def train_gwent(num_episodes: int = 1000):
                 True
             )
 
-        if episode % 20 == 0:
+        if episode % 100 == 0:
             agent.update_target_network()
             print(f"Episode {episode}/{num_episodes} | epsilon: {agent.epsilon:.3f}")
 
-    agent.save("models/gwent_agent.pth")
+    agent.save("models/gwent_agent_alpha.pth")
 
 if __name__ == "__main__":
     train_gwent()
