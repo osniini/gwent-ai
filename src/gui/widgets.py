@@ -1,7 +1,7 @@
 from collections.abc import Callable
 
 import customtkinter as ctk
-from src.engine.card import Card
+from src.engine.card import Card, PASS_ACTION
 from src.engine.board import PlayerBoard
 
 
@@ -28,7 +28,7 @@ CARD_WIDTH = 72
 CARD_HEIGHT = ROW_HEIGHT - 12
 PLAYER_PANEL_WIDTH = 88
 BOARD_HEIGHT = 3 * ROW_HEIGHT + 4
-ROUNDS_TO_WIN = 2
+LIVES_PER_PLAYER = 2
 POWER_COLOR_LEADING = "#4ade80"
 POWER_COLOR_DEFAULT = ("#ebebeb", "#ebebeb")
 POWER_COLOR_BEHIND = "#666666"
@@ -178,7 +178,7 @@ class PlayerWidget(ctk.CTkFrame):
         ).pack()
         ctk.CTkLabel(
             self,
-            text=f"First to {ROUNDS_TO_WIN}",
+            text=f"{LIVES_PER_PLAYER} lives",
             font=ctk.CTkFont(size=9),
             text_color="#666666",
         ).pack(pady=(0, 4))
@@ -186,7 +186,7 @@ class PlayerWidget(ctk.CTkFrame):
         self.round_pips_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.round_pips_frame.pack(pady=(0, 8))
         self.round_pips: list[ctk.CTkLabel] = []
-        for _ in range(ROUNDS_TO_WIN):
+        for _ in range(LIVES_PER_PLAYER):
             pip = ctk.CTkLabel(
                 self.round_pips_frame,
                 text="○",
@@ -208,7 +208,7 @@ class PlayerWidget(ctk.CTkFrame):
     def update(
         self,
         board: PlayerBoard,
-        round_wins: int,
+        lives: int,
         *,
         hand_count: int = 0,
         power_leading: bool | None = None,
@@ -225,10 +225,10 @@ class PlayerWidget(ctk.CTkFrame):
             self.power_label.configure(text_color=POWER_COLOR_DEFAULT)
 
         for i, pip in enumerate(self.round_pips):
-            won = i < round_wins
+            alive = i < lives
             pip.configure(
-                text="●" if won else "○",
-                text_color=POWER_COLOR_LEADING if won else "#555555",
+                text="●" if alive else "○",
+                text_color=POWER_COLOR_LEADING if alive else "#555555",
             )
 
         self.pass_label.configure(text="Passed" if board.passed else "")
@@ -282,14 +282,26 @@ class HandWidget(ctk.CTkFrame):
         for child in self.slots.winfo_children():
             child.destroy()
 
-        for i, card in enumerate(cards):
-            is_legal = bool(legal[i]) if legal is not None and i < len(legal) else True
-            command = (lambda index=i: on_click(index)) if on_click and is_legal else None
+        for card in cards:
+            is_legal = (
+                bool(legal[card.type_id])
+                if legal is not None and card.type_id < len(legal)
+                else True
+            )
+            command = (
+                (lambda type_id=card.type_id: on_click(type_id))
+                if on_click and is_legal
+                else None
+            )
             CardWidget(self.slots, card, command=command, enabled=is_legal).pack(
                 side="left", padx=3, pady=2
             )
 
-        can_pass = bool(legal[8]) if legal is not None and len(legal) > 8 else True
+        can_pass = (
+            bool(legal[PASS_ACTION])
+            if legal is not None and len(legal) > PASS_ACTION
+            else True
+        )
         self.pass_btn.configure(
             command=on_pass if on_pass and can_pass else None,
             state="normal" if on_pass and can_pass else "disabled",
