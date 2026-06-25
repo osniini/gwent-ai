@@ -1,7 +1,22 @@
-import random
 import numpy as np
 from src.engine.board import GameBoard
-from src.engine.card import create_starter_deck, Card
+from src.engine.card import (
+    PASS_ACTION,
+    NUM_CARD_TYPES,
+    create_starter_deck,
+    hand_counts,
+)
+
+GLOBAL_STATE_SIZE = 7
+STARTING_LIVES = 2
+ROUND_WIN_REWARD = 0.5
+MATCH_WIN_REWARD = 1.0
+SCORE_DIFF_SCALE = 0.02
+HAND_SAVE_SCALE = 0.05
+ROUND_SEALED_PASS_SCALE = 0.08
+CARD_WASTE_SCALE = 0.06
+MATCH_HAND_SAVE_SCALE = 0.03
+
 
 class GwentEnv:
     def __init__(self):
@@ -10,35 +25,52 @@ class GwentEnv:
         self.deck2 = []
         self.hand1 = []
         self.hand2 = []
-    
-        self.current_player = 1
-        self.round_wins = [0, 0]
 
-        self.action_size = 9
-        self.state_size = 30
+        self.current_player = 1
+        self.lives = [STARTING_LIVES, STARTING_LIVES]
+        self.deferred_round_rewards: dict[int, float] = {}
+        self.last_round_was_tie = False
+        self.match_draw = False
+
+        self.pass_action = PASS_ACTION
+        self.action_size = NUM_CARD_TYPES + 1
+        self.state_size = GLOBAL_STATE_SIZE + NUM_CARD_TYPES
 
     def _get_state(self):
-        """Numeric vector representation of the state."""
+        """Numeric vector from the current player's perspective."""
         p1_score, p2_score = self.board.get_scores()
         active_hand = self.hand1 if self.current_player == 1 else self.hand2
         opponent_hand = self.hand2 if self.current_player == 1 else self.hand1
 
-        state = [
-            p1_score, p2_score,
-            self.round_wins[0], self.round_wins[1],
-            len(active_hand), len(opponent_hand),
-            1 if self.board.player1.passed else 0,
-            1 if self.board.player2.passed else 0,
-        ]
+        if self.current_player == 1:
+            my_score, opp_score = p1_score, p2_score
+            my_lives, opp_lives = self.lives[0], self.lives[1]
+            my_passed = self.board.player1.passed
+            opp_passed = self.board.player2.passed
+        else:
+            my_score, opp_score = p2_score, p1_score
+            my_lives, opp_lives = self.lives[1], self.lives[0]
+            my_passed = self.board.player2.passed
+            opp_passed = self.board.player1.passed
 
-        while len(state) < self.state_size:
-            state.append(0.0)
-        
-        return np.array(state)
+        state = [
+            my_score,
+            opp_score,
+            my_lives,
+            opp_lives,
+            len(opponent_hand),
+            1 if my_passed else 0,
+            1 if opp_passed else 0,
+        ] + hand_counts(active_hand)
+
+        return np.array(state, dtype=np.float32)
 
     def reset(self):
         self.board.reset()
-        self.round_wins = [0, 0]
+        self.lives = [STARTING_LIVES, STARTING_LIVES]
+        self.deferred_round_rewards = {}
+        self.last_round_was_tie = False
+        self.match_draw = False
         self.current_player = 1
 
         self.deck1 = create_starter_deck()
@@ -46,7 +78,7 @@ class GwentEnv:
 
         self.hand1 = [self.deck1.pop() for _ in range(min(8, len(self.deck1)))]
         self.hand2 = [self.deck2.pop() for _ in range(min(8, len(self.deck2)))]
-        
+
         return self._get_state()
 
     def get_legal_actions(self) -> np.ndarray:
@@ -58,31 +90,142 @@ class GwentEnv:
 
         if active_board.passed:
             return mask
-        
-        for i in range(len(active_hand)):
-            mask[i] = True
-        
-        mask[8] = True
+
+        for type_id, count in enumerate(hand_counts(active_hand)):
+            if count > 0:
+                mask[type_id] = True
+
+        mask[self.pass_action] = True
 
         return mask
 
-    def step(self, action: int):
-        """Execute single action: 0-7 play a card from hand, 8 pass."""
+    def _remove_card_by_type(self, hand: list, type_id: int):
+        for i, card in enumerate(hand):
+            if card.type_id == type_id:
+                return hand.pop(i)
+        raise ValueError(f"No card of type {type_id} in hand")
 
-        active_board = self.board.player1 if self.current_player == 1 else self.board.player2
-        active_hand = self.hand1 if self.current_player == 1 else self.hand2
+    def _score_diff_for_player(self, player: int) -> float:
+        p1_score, p2_score = self.board.get_scores()
+        diff = p1_score - p2_score
+        return diff if player == 1 else -diff
 
-        if action == 8:
-            active_board.passed = True
+    @staticmethod
+    def _hand_power(hand: list) -> int:
+        return sum(card.current_power for card in hand)
+
+    def _opponent_board(self, player: int):
+        return self.board.player1 if player == 2 else self.board.player2
+
+    def _hand_save_bonus(self, player: int, hand: list, *, passed: bool) -> float:
+        """Reward for keeping cards in hand when ahead and passing."""
+        if not passed or self._hand_power(hand) == 0:
+            return 0.0
+        if self._score_diff_for_player(player) <= 0:
+            return 0.0
+        return HAND_SAVE_SCALE * self._hand_power(hand)
+
+    def _round_sealed_pass_bonus(self, player: int, hand: list, *, passed: bool) -> float:
+        """Opponent passed and we are ahead — reward closing the round with cards saved."""
+        if not passed or self._hand_power(hand) == 0:
+            return 0.0
+        if not self._opponent_board(player).passed:
+            return 0.0
+        if self._score_diff_for_player(player) <= 0:
+            return 0.0
+        return ROUND_SEALED_PASS_SCALE * self._hand_power(hand)
+
+    @staticmethod
+    def _perspective_from_p1(player: int, p1_positive: float) -> float:
+        return p1_positive if player == 1 else -p1_positive
+
+    def _match_hand_bonus(self, player: int) -> float:
+        hand = self.hand1 if player == 1 else self.hand2
+        return MATCH_HAND_SAVE_SCALE * self._hand_power(hand)
+
+    def consume_deferred_round_reward(self, player: int) -> float:
+        """Apply deferred round-end reward for a player who already ended their turn."""
+        return self.deferred_round_rewards.pop(player, 0.0)
+
+    def _match_is_over(self) -> bool:
+        return self.match_draw or self.lives[0] == 0 or self.lives[1] == 0
+
+    def get_match_reward_for_player(self, player: int) -> float:
+        """Terminal match reward from the given player's perspective."""
+        hand_bonus = self._match_hand_bonus(player)
+
+        if self.match_draw or (self.lives[0] == 0 and self.lives[1] == 0):
+            return -MATCH_WIN_REWARD + hand_bonus
+        if self.lives[0] == 0:
+            return self._perspective_from_p1(player, -MATCH_WIN_REWARD) + hand_bonus
+        if self.lives[1] == 0:
+            return self._perspective_from_p1(player, MATCH_WIN_REWARD) + hand_bonus
+        return 0.0
+
+    def _set_deferred_round_rewards(self, outcome: int) -> None:
+        if outcome == 1:
+            self.deferred_round_rewards = {1: ROUND_WIN_REWARD, 2: -ROUND_WIN_REWARD}
+        elif outcome == -1:
+            self.deferred_round_rewards = {1: -ROUND_WIN_REWARD, 2: ROUND_WIN_REWARD}
         else:
-            if action < len(active_hand):
-                card = active_hand.pop(action)
-                self.board.place_card(self.current_player, card)
-            else:
-                raise ValueError(f"Invalid action: {action}")
-        
-        if self.board.player1.passed and self.board.player2.passed:
-            self._check_round_end()
+            self.deferred_round_rewards = {
+                1: -ROUND_WIN_REWARD,
+                2: -ROUND_WIN_REWARD,
+            }
+
+    def step(self, action: int):
+        """Execute action: 0..K-1 play a card type, K pass."""
+
+        acting_player = self.current_player
+        active_board = self.board.player1 if acting_player == 1 else self.board.player2
+        active_hand = self.hand1 if acting_player == 1 else self.hand2
+        score_before = self._score_diff_for_player(acting_player)
+        opponent_passed = self._opponent_board(acting_player).passed
+        played_power = 0
+
+        if action == self.pass_action:
+            active_board.passed = True
+        elif 0 <= action < NUM_CARD_TYPES:
+            card = self._remove_card_by_type(active_hand, action)
+            played_power = card.current_power
+            self.board.place_card(acting_player, card)
+        else:
+            raise ValueError(f"Invalid action: {action}")
+
+        score_after = self._score_diff_for_player(acting_player)
+        reward = SCORE_DIFF_SCALE * (score_after - score_before)
+
+        if (
+            action != self.pass_action
+            and opponent_passed
+            and score_before > 0
+        ):
+            reward -= CARD_WASTE_SCALE * played_power
+
+        round_ending = self.board.player1.passed and self.board.player2.passed
+
+        if action == self.pass_action and not round_ending:
+            reward += self._hand_save_bonus(
+                acting_player,
+                active_hand,
+                passed=True,
+            )
+            reward += self._round_sealed_pass_bonus(
+                acting_player,
+                active_hand,
+                passed=True,
+            )
+
+        if round_ending:
+            hand_power = self._hand_power(active_hand)
+            ahead = self._score_diff_for_player(acting_player) > 0
+            passed_with_cards = active_board.passed and hand_power > 0
+            round_outcome = self._check_round_end()
+            if not self.match_draw:
+                self._set_deferred_round_rewards(round_outcome)
+            reward += self.deferred_round_rewards.pop(acting_player, 0.0)
+            if ahead and passed_with_cards:
+                reward += HAND_SAVE_SCALE * hand_power
 
         next_player = 2 if self.current_player == 1 else 1
         next_board = self.board.player2 if next_player == 2 else self.board.player1
@@ -91,36 +234,37 @@ class GwentEnv:
             self.current_player = next_player
         elif active_board.passed:
             pass
-        
-        done = False
-        reward = 0.0
 
-        if self.round_wins[0] >= 2:
+        done = False
+
+        if self._match_is_over():
             done = True
-            reward = 1.0 if self.current_player == 1 else -1.0
-        elif self.round_wins[1] >= 2:
-            done = True
-            reward = -1.0 if self.current_player == 1 else 1.0
-        
-        # If the game is not done but no one can do anything anymore
-        if not done and len(self.hand1) == 0 and len(self.hand2) == 0 and self.board.player1.passed and self.board.player2.passed:
-            done = True
-            if self.round_wins[0] > self.round_wins[1]:
-                reward = 1.0 if self.current_player == 1 else -1.0
-            else:
-                reward = -1.0 if self.current_player == 1 else 1.0
-        
+            reward += self.get_match_reward_for_player(acting_player)
+
         return self._get_state(), reward, done
 
-    def _check_round_end(self):
+    def _check_round_end(self) -> int:
+        """Return +1 if P1 won the round, -1 if P2 won, 0 on a tie."""
         p1_score, p2_score = self.board.get_scores()
+        self.last_round_was_tie = False
+        self.match_draw = False
 
         if p1_score > p2_score:
-            self.round_wins[0] += 1
+            self.lives[1] -= 1
+            outcome = 1
         elif p2_score > p1_score:
-            self.round_wins[1] += 1
+            self.lives[0] -= 1
+            outcome = -1
         else:
-            self.round_wins[0] += 1
-            self.round_wins[1] += 1
-        
+            outcome = 0
+            self.last_round_was_tie = True
+            if self.lives[0] == 1 and self.lives[1] == 1:
+                self.match_draw = True
+                self.lives[0] = 0
+                self.lives[1] = 0
+            else:
+                self.lives[0] -= 1
+                self.lives[1] -= 1
+
         self.board.reset()
+        return outcome
