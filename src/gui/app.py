@@ -47,13 +47,13 @@ class GwentApp(ctk.CTk):
 
         self.opponent_player.update(
             self.env.board.player2,
-            self.env.round_wins[1],
+            self.env.lives[1],
             hand_count=len(self.env.hand2),
             power_leading=p2_leading,
         )
         self.player_player.update(
             self.env.board.player1,
-            self.env.round_wins[0],
+            self.env.lives[0],
             hand_count=len(self.env.hand1),
             power_leading=p1_leading,
         )
@@ -97,43 +97,43 @@ class GwentApp(ctk.CTk):
         self._apply_action(action)
 
     def _apply_action(self, action: int):
-        prev_round_wins = list(self.env.round_wins)
+        prev_lives = list(self.env.lives)
         _, _, done = self.env.step(action)
-        self._on_step_complete(prev_round_wins, done)
+        self._on_step_complete(prev_lives, done)
         self.refresh()
 
-    def _on_step_complete(self, prev_round_wins: list[int], done: bool):
-        round_changed = self.env.round_wins != prev_round_wins
+    def _on_step_complete(self, prev_lives: list[int], done: bool):
+        round_changed = self.env.lives != prev_lives or self.env.last_round_was_tie
 
         if done:
             self.game_over = True
             self._show_overlay(self._game_over_message(), show_new_game=True)
         elif round_changed:
             self.round_paused = True
-            self._show_overlay(self._round_end_message(prev_round_wins), show_new_game=False)
+            self._show_overlay(self._round_end_message(prev_lives), show_new_game=False)
             if self._round_continue_job is not None:
                 self.after_cancel(self._round_continue_job)
             self._round_continue_job = self.after(2000, self._continue_round)
 
-    def _round_end_message(self, prev_round_wins: list[int]) -> str:
-        p1_gain = self.env.round_wins[0] - prev_round_wins[0]
-        p2_gain = self.env.round_wins[1] - prev_round_wins[1]
-        if p1_gain and p2_gain:
-            return "Round tied — both players take a round win."
-        if p1_gain:
-            return "You won the round!"
-        return "Opponent won the round."
+    def _round_end_message(self, prev_lives: list[int]) -> str:
+        if self.env.match_draw:
+            return "Round tied at last life — match drawn."
+        if self.env.last_round_was_tie:
+            return "Round tied — both players lose a life."
+        if self.env.lives[0] < prev_lives[0]:
+            return "You lost the round!"
+        return "You won the round!"
 
     def _game_over_message(self) -> str:
-        if self.env.round_wins[0] >= 2:
-            return "You win the match!"
-        if self.env.round_wins[1] >= 2:
+        if self.env.match_draw:
+            return "Match drawn."
+        if self.env.lives[0] == 0 and self.env.lives[1] > 0:
             return "Opponent wins the match!"
-        if self.env.round_wins[0] > self.env.round_wins[1]:
+        if self.env.lives[1] == 0 and self.env.lives[0] > 0:
             return "You win the match!"
-        if self.env.round_wins[1] > self.env.round_wins[0]:
-            return "Opponent wins the match!"
-        return "Match drawn."
+        if self.env.lives[0] == 0 and self.env.lives[1] == 0:
+            return "Match drawn."
+        return "Match over."
 
     def _show_overlay(self, message: str, *, show_new_game: bool):
         self.overlay_message.configure(text=message)
@@ -211,18 +211,18 @@ class GwentApp(ctk.CTk):
         self.continue_btn = ctk.CTkButton(self.overlay, text="Continue", width=120, command=self._continue_round)
         self.new_game_btn = ctk.CTkButton(self.overlay, text="New Game", width=120, command=self.new_game)
 
-    def on_play_card(self, hand_index: int):
+    def on_play_card(self, type_id: int):
         if self.game_over or self.round_paused or self.env.current_player != 1:
             return
 
         legal = self.env.get_legal_actions()
-        if hand_index >= len(legal) or not legal[hand_index]:
+        if type_id >= len(legal) or not legal[type_id]:
             return
 
-        self._apply_action(hand_index)
+        self._apply_action(type_id)
 
     def on_pass(self):
-        self.on_play_card(8)
+        self._apply_action(self.env.pass_action)
 
 
 if __name__ == "__main__":
