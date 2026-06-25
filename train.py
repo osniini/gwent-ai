@@ -2,7 +2,7 @@ import numpy as np
 from src.engine.gwent_env import GwentEnv
 from src.ai.agent import DQNAgent
 
-def train_gwent(num_episodes: int = 10000):
+def train_gwent(num_episodes: int = 5000):
     env = GwentEnv()
 
     agent = DQNAgent(env.state_size, env.action_size)
@@ -17,49 +17,50 @@ def train_gwent(num_episodes: int = 10000):
 
         last_state = {1: None, 2: None}
         last_action = {1: None, 2: None}
-        
+        pending_reward = {1: 0.0, 2: 0.0}
+        last_acting_player = None
+
         while not done:
-            current_player = env.current_player
+            acting_player = env.current_player
+            pending_reward[acting_player] += env.consume_deferred_round_reward(acting_player)
 
             legal_actions = env.get_legal_actions()
 
             action = agent.select_action(state, legal_actions)
 
-            if last_state[current_player] is not None:
+            if last_state[acting_player] is not None:
                 agent.memory.push(
-                    last_state[current_player],
-                    last_action[current_player],
-                    0.0,
+                    last_state[acting_player],
+                    last_action[acting_player],
+                    pending_reward[acting_player],
                     state,
-                    False
+                    False,
                 )
-            
-            last_state[current_player] = state
-            last_action[current_player] = action
+                pending_reward[acting_player] = 0.0
 
-            next_state, reward, done = env.step(action)
-            state = next_state
+            last_state[acting_player] = state
+            last_action[acting_player] = action
+
+            state, reward, done = env.step(action)
+            pending_reward[acting_player] += reward
+            last_acting_player = acting_player
 
             agent.train_step()
 
-        p1_reward = reward if env.current_player == 1 else -reward
-        p2_reward = -reward if env.current_player == 1 else reward
+        for player in (1, 2):
+            if last_state[player] is None:
+                continue
 
-        if last_state[1] is not None:
+            terminal_reward = pending_reward[player]
+            if player != last_acting_player:
+                terminal_reward += env.get_match_reward_for_player(player)
+
             agent.memory.push(
-                last_state[1],
-                last_action[1],
-                p1_reward,
+                last_state[player],
+                last_action[player],
+                terminal_reward,
                 state,
-                True
-            )
-        if last_state[2] is not None:
-            agent.memory.push(
-                last_state[2],
-                last_action[2],
-                p2_reward,
-                state,
-                True
+                True,
             )
 
         if episode % 100 == 0:
