@@ -1,4 +1,5 @@
 import random
+import numpy as np
 from src.engine.gwent_env import GwentEnv
 
 
@@ -12,7 +13,8 @@ print("State:", state)
 turns = 0
 
 while not done and turns < 20:
-    action = random.randint(0, 8)
+    legal = env.get_legal_actions()
+    action = int(random.choice(np.where(legal)[0]))
 
     state, reward, done = env.step(action)
     turns += 1
