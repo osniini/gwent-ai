@@ -1,17 +1,29 @@
+import random
+
 CARD_CATALOG = [
-    {"name": "Geralt", "power": 10, "row": "melee"},
+    {"name": "Geralt", "power": 15, "row": "melee"},
     {"name": "Yennefer", "power": 7, "row": "ranged"},
     {"name": "Dandelion", "power": 2, "row": "melee"},
     {"name": "Trebuchet", "power": 6, "row": "siege"},
     {"name": "Redanian Knight", "power": 4, "row": "melee"},
     {"name": "Archer", "power": 5, "row": "ranged"},
     {"name": "Catapult", "power": 8, "row": "siege"},
-    {"name": "Ciri", "power": 10, "row": "melee"},
+    {"name": "Ciri", "power": 15, "row": "melee"},
+    {"name": "Poor Fucking Infantry", "power": 1, "row": "melee"},
+    {"name": "Vesemir", "power": 6, "row": "melee"},
+    {"name": "Triss", "power": 7, "row": "melee"},
+    {"name": "Philippa Eilhart", "power": 10, "row": "ranged"},
+    {"name": "Thaler", "power": 1, "row": "siege"},
+    {"name": "Roach", "power": 3, "row": "melee"},
+    {"name": "Dethmold", "power": 6, "row": "ranged"},
+    {"name": "Sheldon Skaggs", "power": 4, "row": "ranged"},
+    {"name": "Keiza Metz", "power": 5, "row": "ranged"},
 ]
 
 CARD_BY_NAME = {entry["name"]: i for i, entry in enumerate(CARD_CATALOG)}
 NUM_CARD_TYPES = len(CARD_CATALOG)
 PASS_ACTION = NUM_CARD_TYPES
+DECK_SIZE = 10
 
 
 class Card:
@@ -41,5 +53,7 @@ def hand_counts(hand: list[Card]) -> list[int]:
     return counts
 
 
-def create_starter_deck():
-    return [Card(type_id) for type_id in range(NUM_CARD_TYPES)]
+def create_random_deck():
+    """Build a deck by sampling card types with replacement (duplicates allowed)."""
+    type_ids = random.choices(range(NUM_CARD_TYPES), k=DECK_SIZE)
+    return [Card(type_id) for type_id in type_ids]

@@ -3,7 +3,7 @@ from src.engine.board import GameBoard
 from src.engine.card import (
     PASS_ACTION,
     NUM_CARD_TYPES,
-    create_starter_deck,
+    create_random_deck,
     hand_counts,
 )
 
@@ -73,8 +73,8 @@ class GwentEnv:
         self.match_draw = False
         self.current_player = 1
 
-        self.deck1 = create_starter_deck()
-        self.deck2 = create_starter_deck()
+        self.deck1 = create_random_deck()
+        self.deck2 = create_random_deck()
 
         self.hand1 = [self.deck1.pop() for _ in range(min(8, len(self.deck1)))]
         self.hand2 = [self.deck2.pop() for _ in range(min(8, len(self.deck2)))]
