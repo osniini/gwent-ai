@@ -11,11 +11,13 @@ GLOBAL_STATE_SIZE = 7
 STARTING_LIVES = 2
 ROUND_WIN_REWARD = 0.5
 MATCH_WIN_REWARD = 1.0
-SCORE_DIFF_SCALE = 0.02
-HAND_SAVE_SCALE = 0.05
-ROUND_SEALED_PASS_SCALE = 0.08
-CARD_WASTE_SCALE = 0.06
-MATCH_HAND_SAVE_SCALE = 0.03
+SCORE_DIFF_SCALE = 0.00
+ROUND_SEALED_PASS_SCALE = 0.06
+CARD_PLAY_COST_SCALE = 0.05
+CARD_PLAY_AHEAD_PENALTY_SCALE = 0.06
+ROUND_WIN_HAND_SAVE_SCALE = 0.06
+PASS_WITHOUT_LEAD_PENALTY = 0.15
+PASS_WHILE_LEADING_OPEN_PENALTY = 0.15
 
 
 class GwentEnv:
@@ -64,6 +66,26 @@ class GwentEnv:
         ] + hand_counts(active_hand)
 
         return np.array(state, dtype=np.float32)
+
+    def get_state_for_player(self, player: int) -> np.ndarray:
+        """State vector from a specific player's perspective (without switching turn order)."""
+        saved = self.current_player
+        self.current_player = player
+        state = self._get_state()
+        self.current_player = saved
+        return state
+
+    @staticmethod
+    def legal_mask_from_state(state: np.ndarray) -> np.ndarray:
+        """Rebuild legal actions from a learner-perspective state vector."""
+        mask = np.zeros(PASS_ACTION + 1, dtype=bool)
+        if state[5] >= 0.5:
+            return mask
+        for type_id in range(PASS_ACTION):
+            if state[GLOBAL_STATE_SIZE + type_id] > 0:
+                mask[type_id] = True
+        mask[PASS_ACTION] = True
+        return mask
 
     def reset(self):
         self.board.reset()
@@ -117,13 +139,51 @@ class GwentEnv:
     def _opponent_board(self, player: int):
         return self.board.player1 if player == 2 else self.board.player2
 
-    def _hand_save_bonus(self, player: int, hand: list, *, passed: bool) -> float:
-        """Reward for keeping cards in hand when ahead and passing."""
-        if not passed or self._hand_power(hand) == 0:
+    def _hand_save_value_scale(self, player: int) -> float:
+        """Saved cards only matter when another round can follow a loss."""
+        lives = self.lives[0] if player == 1 else self.lives[1]
+        if lives <= 1 or STARTING_LIVES <= 1:
+            return 0.0
+        return (lives - 1) / (STARTING_LIVES - 1)
+
+    def _pass_without_lead_penalty(self, player: int, *, passed: bool) -> float:
+        """Discourage passing while tied or behind before the round is decided."""
+        if not passed:
+            return 0.0
+        if self._opponent_board(player).passed:
+            return 0.0
+        if self._score_diff_for_player(player) > 0:
+            return 0.0
+        return PASS_WITHOUT_LEAD_PENALTY
+
+    def _pass_while_leading_open_penalty(self, player: int, *, passed: bool) -> float:
+        """On last life, passing while ahead lets a still-active opponent overtake you."""
+        if not passed:
+            return 0.0
+        if self._opponent_board(player).passed:
             return 0.0
         if self._score_diff_for_player(player) <= 0:
             return 0.0
-        return HAND_SAVE_SCALE * self._hand_power(hand)
+        lives = self.lives[0] if player == 1 else self.lives[1]
+        if lives > 1:
+            return 0.0
+        return PASS_WHILE_LEADING_OPEN_PENALTY
+
+    def _card_play_ahead_penalty(
+        self,
+        player: int,
+        played_power: int,
+        score_after: float,
+    ) -> float:
+        """Discourage dumping cards while ahead only when saving them for another round matters."""
+        if played_power == 0 or score_after <= 0:
+            return 0.0
+        if self._opponent_board(player).passed:
+            return 0.0
+        scale = self._hand_save_value_scale(player)
+        if scale == 0.0:
+            return 0.0
+        return CARD_PLAY_AHEAD_PENALTY_SCALE * played_power * scale
 
     def _round_sealed_pass_bonus(self, player: int, hand: list, *, passed: bool) -> float:
         """Opponent passed and we are ahead — reward closing the round with cards saved."""
@@ -133,15 +193,30 @@ class GwentEnv:
             return 0.0
         if self._score_diff_for_player(player) <= 0:
             return 0.0
-        return ROUND_SEALED_PASS_SCALE * self._hand_power(hand)
+        scale = self._hand_save_value_scale(player)
+        if scale == 0.0:
+            return 0.0
+        return ROUND_SEALED_PASS_SCALE * self._hand_power(hand) * scale
 
     @staticmethod
     def _perspective_from_p1(player: int, p1_positive: float) -> float:
         return p1_positive if player == 1 else -p1_positive
 
-    def _match_hand_bonus(self, player: int) -> float:
+    def _round_win_hand_bonus(self, player: int, outcome: int) -> float:
+        """Bonus for winning the round with unused hand power."""
+        if outcome == 0:
+            return 0.0
+        won = (outcome == 1 and player == 1) or (outcome == -1 and player == 2)
+        if not won:
+            return 0.0
         hand = self.hand1 if player == 1 else self.hand2
-        return MATCH_HAND_SAVE_SCALE * self._hand_power(hand)
+        hand_power = self._hand_power(hand)
+        if hand_power == 0:
+            return 0.0
+        scale = self._hand_save_value_scale(player)
+        if scale == 0.0:
+            return 0.0
+        return ROUND_WIN_HAND_SAVE_SCALE * hand_power * scale
 
     def consume_deferred_round_reward(self, player: int) -> float:
         """Apply deferred round-end reward for a player who already ended their turn."""
@@ -152,26 +227,25 @@ class GwentEnv:
 
     def get_match_reward_for_player(self, player: int) -> float:
         """Terminal match reward from the given player's perspective."""
-        hand_bonus = self._match_hand_bonus(player)
-
         if self.match_draw or (self.lives[0] == 0 and self.lives[1] == 0):
-            return -MATCH_WIN_REWARD + hand_bonus
+            return -MATCH_WIN_REWARD
         if self.lives[0] == 0:
-            return self._perspective_from_p1(player, -MATCH_WIN_REWARD) + hand_bonus
+            return self._perspective_from_p1(player, -MATCH_WIN_REWARD)
         if self.lives[1] == 0:
-            return self._perspective_from_p1(player, MATCH_WIN_REWARD) + hand_bonus
+            return self._perspective_from_p1(player, MATCH_WIN_REWARD)
         return 0.0
 
     def _set_deferred_round_rewards(self, outcome: int) -> None:
-        if outcome == 1:
-            self.deferred_round_rewards = {1: ROUND_WIN_REWARD, 2: -ROUND_WIN_REWARD}
-        elif outcome == -1:
-            self.deferred_round_rewards = {1: -ROUND_WIN_REWARD, 2: ROUND_WIN_REWARD}
-        else:
-            self.deferred_round_rewards = {
-                1: -ROUND_WIN_REWARD,
-                2: -ROUND_WIN_REWARD,
-            }
+        self.deferred_round_rewards = {}
+        for player in (1, 2):
+            if outcome == 1:
+                reward = ROUND_WIN_REWARD if player == 1 else -ROUND_WIN_REWARD
+            elif outcome == -1:
+                reward = -ROUND_WIN_REWARD if player == 1 else ROUND_WIN_REWARD
+            else:
+                reward = -ROUND_WIN_REWARD
+            reward += self._round_win_hand_bonus(player, outcome)
+            self.deferred_round_rewards[player] = reward
 
     def step(self, action: int):
         """Execute action: 0..K-1 play a card type, K pass."""
@@ -180,7 +254,6 @@ class GwentEnv:
         active_board = self.board.player1 if acting_player == 1 else self.board.player2
         active_hand = self.hand1 if acting_player == 1 else self.hand2
         score_before = self._score_diff_for_player(acting_player)
-        opponent_passed = self._opponent_board(acting_player).passed
         played_power = 0
 
         if action == self.pass_action:
@@ -195,37 +268,30 @@ class GwentEnv:
         score_after = self._score_diff_for_player(acting_player)
         reward = SCORE_DIFF_SCALE * (score_after - score_before)
 
-        if (
-            action != self.pass_action
-            and opponent_passed
-            and score_before > 0
-        ):
-            reward -= CARD_WASTE_SCALE * played_power
+        if action != self.pass_action:
+            reward -= CARD_PLAY_COST_SCALE * played_power
+            reward -= self._card_play_ahead_penalty(
+                acting_player,
+                played_power,
+                score_after,
+            )
 
         round_ending = self.board.player1.passed and self.board.player2.passed
 
         if action == self.pass_action and not round_ending:
-            reward += self._hand_save_bonus(
-                acting_player,
-                active_hand,
-                passed=True,
-            )
             reward += self._round_sealed_pass_bonus(
                 acting_player,
                 active_hand,
                 passed=True,
             )
+            reward -= self._pass_without_lead_penalty(acting_player, passed=True)
+            reward -= self._pass_while_leading_open_penalty(acting_player, passed=True)
 
         if round_ending:
-            hand_power = self._hand_power(active_hand)
-            ahead = self._score_diff_for_player(acting_player) > 0
-            passed_with_cards = active_board.passed and hand_power > 0
             round_outcome = self._check_round_end()
             if not self.match_draw:
                 self._set_deferred_round_rewards(round_outcome)
             reward += self.deferred_round_rewards.pop(acting_player, 0.0)
-            if ahead and passed_with_cards:
-                reward += HAND_SAVE_SCALE * hand_power
 
         next_player = 2 if self.current_player == 1 else 1
         next_board = self.board.player2 if next_player == 2 else self.board.player1
