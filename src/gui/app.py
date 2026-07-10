@@ -25,7 +25,7 @@ class GwentApp(ctk.CTk):
         self._round_continue_job = None
 
         self.agent = DQNAgent(self.env.state_size, self.env.action_size)
-        self.agent.load("models/gwent_agent_alpha.pth")
+        self.agent.load("models/gwent_agent_beta.pth")
         self.agent.epsilon = 0  # no random exploration in the GUI
 
         self.title("Gwent")
