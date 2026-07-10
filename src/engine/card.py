@@ -39,7 +39,7 @@ class Card:
         self.current_power = stats["power"]
 
     def reset(self):
-        """Palauttaa kortin voiman alkutilaan erän päättyessä."""
+        """Reset card power to its base value."""
         self.current_power = self.base_power
 
     def __repr__(self):
