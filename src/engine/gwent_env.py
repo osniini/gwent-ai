@@ -269,7 +269,12 @@ class GwentEnv:
         reward = SCORE_DIFF_SCALE * (score_after - score_before)
 
         if action != self.pass_action:
-            reward -= CARD_PLAY_COST_SCALE * played_power
+            # Only tax card spend when saved hand power can matter next round.
+            reward -= (
+                CARD_PLAY_COST_SCALE
+                * played_power
+                * self._hand_save_value_scale(acting_player)
+            )
             reward -= self._card_play_ahead_penalty(
                 acting_player,
                 played_power,
