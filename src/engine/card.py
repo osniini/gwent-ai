@@ -22,6 +22,7 @@ CARD_CATALOG = [
     {"name": "Impenetrable Fog", "weather_row": "ranged"},
     {"name": "Torrential Rain", "weather_row": "siege"},
     {"name": "Clear Weather", "weather_row": "clear"},
+    {"name": "Commander's Horn", "effect": "horn"},
 ]
 
 CARD_BY_NAME = {entry["name"]: i for i, entry in enumerate(CARD_CATALOG)}
@@ -44,6 +45,7 @@ class Card:
         self.weather_row = stats.get("weather_row")
         self.hero = stats.get("hero", False)
         self.unique = stats.get("unique", False)
+        self.effect = stats.get("effect")
 
     def reset(self):
         """Reset card power to its base value."""
@@ -52,6 +54,8 @@ class Card:
     def __repr__(self):
         if self.weather_row is not None:
             return f"{self.name} [weather: {self.weather_row}]"
+        if self.effect is not None:
+            return f"{self.name} [effect: {self.effect}]"
         hero = " hero" if self.hero else ""
         return f"{self.name} ({self.current_power} [Row: {self.row}]{hero})"
 

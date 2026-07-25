@@ -9,10 +9,20 @@ class PlayerBoard:
             "ranged": [],
             "siege": [],
         }
+        self.horn_rows: Dict[str, bool] = {
+            "melee": False,
+            "ranged": False,
+            "siege": False,
+        }
         self.passed: bool = False
 
     def reset(self):
         self.rows = {'melee': [], 'ranged': [], 'siege': []}
+        self.horn_rows = {
+            "melee": False,
+            "ranged": False,
+            "siege": False,
+        }
         self.passed = False
 
     def get_row_score(self, row: str) -> int:
@@ -60,6 +70,18 @@ class GameBoard:
         else:
             raise ValueError(f"Invalid row: {card.row}")
 
+    def apply_horn(self, player_num: int, row: str):
+        """Double non-hero unit power on one of the player's rows."""
+        target_board = self.player1 if player_num == 1 else self.player2
+
+        if row not in target_board.horn_rows:
+            raise ValueError(f"Invalid horn row: {row}")
+        if target_board.horn_rows[row]:
+            raise ValueError(f"Commander's Horn is already active on {row}")
+
+        target_board.horn_rows[row] = True
+        self.recompute_powers()
+
     def apply_weather(self, weather_row: str):
         """Apply a weather effect, then recompute unit powers."""
         if weather_row == "clear":
@@ -72,13 +94,15 @@ class GameBoard:
         self.recompute_powers()
 
     def recompute_powers(self):
-        """Reset all units, then apply active weather (heroes are immune)."""
+        """Reset units, apply weather, then double horned non-hero rows."""
         for board in (self.player1, self.player2):
             for row, cards in board.rows.items():
                 for card in cards:
                     card.reset()
                     if self.weather_rows[row] and not card.hero:
                         card.current_power = 1
+                    if board.horn_rows[row] and not card.hero:
+                        card.current_power *= 2
 
     def get_scores(self) -> tuple[int, int]:
         return (self.player1.get_total_score(), self.player2.get_total_score())

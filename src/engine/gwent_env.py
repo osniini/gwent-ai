@@ -1,18 +1,26 @@
 import numpy as np
 from src.engine.board import GameBoard
 from src.engine.card import (
-    PASS_ACTION,
+    CARD_BY_NAME,
     NUM_CARD_TYPES,
     create_random_deck,
     hand_counts,
 )
 
-WEATHER_STATE_ROWS = ("melee", "ranged", "siege")
+ROWS = ("melee", "ranged", "siege")
+HORN_CARD_TYPE = CARD_BY_NAME["Commander's Horn"]
+HORN_ACTION_START = NUM_CARD_TYPES
+HORN_ACTIONS = {
+    row: HORN_ACTION_START + index
+    for index, row in enumerate(ROWS)
+}
+PASS_ACTION = HORN_ACTION_START + len(HORN_ACTIONS)
 # Per side: non-hero then hero power for each of melee/ranged/siege (6), times 2 sides.
-BOARD_POWER_FEATURES = 2 * 2 * len(WEATHER_STATE_ROWS)
-# [board powers...] my_lives, opp_lives, opp_hand_len, my_passed, opp_passed, weather×3
+BOARD_POWER_FEATURES = 2 * 2 * len(ROWS)
+# [board powers...] my_lives, opp_lives, opp_hand_len, my_passed, opp_passed, weather×3, horn×6
 MY_PASSED_STATE_INDEX = BOARD_POWER_FEATURES + 3
-GLOBAL_STATE_SIZE = BOARD_POWER_FEATURES + 5 + len(WEATHER_STATE_ROWS)
+MY_HORN_STATE_INDEX = BOARD_POWER_FEATURES + 5 + len(ROWS)
+GLOBAL_STATE_SIZE = MY_HORN_STATE_INDEX + 2 * len(ROWS)
 STARTING_LIVES = 2
 ROUND_WIN_REWARD = 0.5
 MATCH_WIN_REWARD = 1.0
@@ -40,7 +48,7 @@ class GwentEnv:
         self.match_draw = False
 
         self.pass_action = PASS_ACTION
-        self.action_size = NUM_CARD_TYPES + 1
+        self.action_size = PASS_ACTION + 1
         self.state_size = GLOBAL_STATE_SIZE + NUM_CARD_TYPES
 
     @staticmethod
@@ -50,7 +58,7 @@ class GwentEnv:
         for board in (my_board, opp_board):
             non_hero = []
             hero = []
-            for row in WEATHER_STATE_ROWS:
+            for row in ROWS:
                 row_non_hero, row_hero = board.get_row_power_split(row)
                 non_hero.append(row_non_hero)
                 hero.append(row_hero)
@@ -76,7 +84,11 @@ class GwentEnv:
 
         weather_bits = [
             1 if self.board.weather_rows[row] else 0
-            for row in WEATHER_STATE_ROWS
+            for row in ROWS
+        ]
+        horn_bits = [
+            *(1 if my_board.horn_rows[row] else 0 for row in ROWS),
+            *(1 if opp_board.horn_rows[row] else 0 for row in ROWS),
         ]
         state = [
             *self._board_power_features(my_board, opp_board),
@@ -86,6 +98,7 @@ class GwentEnv:
             1 if my_passed else 0,
             1 if opp_passed else 0,
             *weather_bits,
+            *horn_bits,
         ] + hand_counts(active_hand)
 
         return np.array(state, dtype=np.float32)
@@ -104,9 +117,13 @@ class GwentEnv:
         mask = np.zeros(PASS_ACTION + 1, dtype=bool)
         if state[MY_PASSED_STATE_INDEX] >= 0.5:
             return mask
-        for type_id in range(PASS_ACTION):
-            if state[GLOBAL_STATE_SIZE + type_id] > 0:
+        for type_id in range(NUM_CARD_TYPES):
+            if type_id != HORN_CARD_TYPE and state[GLOBAL_STATE_SIZE + type_id] > 0:
                 mask[type_id] = True
+        if state[GLOBAL_STATE_SIZE + HORN_CARD_TYPE] > 0:
+            for index, row in enumerate(ROWS):
+                if state[MY_HORN_STATE_INDEX + index] < 0.5:
+                    mask[HORN_ACTIONS[row]] = True
         mask[PASS_ACTION] = True
         return mask
 
@@ -137,8 +154,12 @@ class GwentEnv:
             return mask
 
         for type_id, count in enumerate(hand_counts(active_hand)):
-            if count > 0:
+            if type_id != HORN_CARD_TYPE and count > 0:
                 mask[type_id] = True
+            elif type_id == HORN_CARD_TYPE and count > 0:
+                for row, action in HORN_ACTIONS.items():
+                    if not active_board.horn_rows[row]:
+                        mask[action] = True
 
         mask[self.pass_action] = True
 
@@ -271,11 +292,15 @@ class GwentEnv:
             self.deferred_round_rewards[player] = reward
 
     def step(self, action: int):
-        """Execute action: 0..K-1 play a card type, K pass."""
+        """Execute a card, targeted Horn, or pass action."""
 
         acting_player = self.current_player
         active_board = self.board.player1 if acting_player == 1 else self.board.player2
         active_hand = self.hand1 if acting_player == 1 else self.hand2
+        legal_actions = self.get_legal_actions()
+        if action < 0 or action >= self.action_size or not legal_actions[action]:
+            raise ValueError(f"Illegal action: {action}")
+
         score_before = self._score_diff_for_player(acting_player)
         played_power = 0
 
@@ -289,6 +314,10 @@ class GwentEnv:
             else:
                 self.board.place_card(acting_player, card)
                 self.board.recompute_powers()
+        elif action in HORN_ACTIONS.values():
+            row = next(row for row, horn_action in HORN_ACTIONS.items() if horn_action == action)
+            self._remove_card_by_type(active_hand, HORN_CARD_TYPE)
+            self.board.apply_horn(acting_player, row)
         else:
             raise ValueError(f"Invalid action: {action}")
 
