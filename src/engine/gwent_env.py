@@ -7,7 +7,12 @@ from src.engine.card import (
     hand_counts,
 )
 
-GLOBAL_STATE_SIZE = 7
+WEATHER_STATE_ROWS = ("melee", "ranged", "siege")
+# Per side: non-hero then hero power for each of melee/ranged/siege (6), times 2 sides.
+BOARD_POWER_FEATURES = 2 * 2 * len(WEATHER_STATE_ROWS)
+# [board powers...] my_lives, opp_lives, opp_hand_len, my_passed, opp_passed, weather×3
+MY_PASSED_STATE_INDEX = BOARD_POWER_FEATURES + 3
+GLOBAL_STATE_SIZE = BOARD_POWER_FEATURES + 5 + len(WEATHER_STATE_ROWS)
 STARTING_LIVES = 2
 ROUND_WIN_REWARD = 0.5
 MATCH_WIN_REWARD = 1.0
@@ -38,31 +43,49 @@ class GwentEnv:
         self.action_size = NUM_CARD_TYPES + 1
         self.state_size = GLOBAL_STATE_SIZE + NUM_CARD_TYPES
 
+    @staticmethod
+    def _board_power_features(my_board, opp_board) -> list[int]:
+        """Non-hero then hero current power per row, for me then opponent."""
+        features = []
+        for board in (my_board, opp_board):
+            non_hero = []
+            hero = []
+            for row in WEATHER_STATE_ROWS:
+                row_non_hero, row_hero = board.get_row_power_split(row)
+                non_hero.append(row_non_hero)
+                hero.append(row_hero)
+            features.extend(non_hero)
+            features.extend(hero)
+        return features
+
     def _get_state(self):
         """Numeric vector from the current player's perspective."""
-        p1_score, p2_score = self.board.get_scores()
         active_hand = self.hand1 if self.current_player == 1 else self.hand2
         opponent_hand = self.hand2 if self.current_player == 1 else self.hand1
 
         if self.current_player == 1:
-            my_score, opp_score = p1_score, p2_score
+            my_board, opp_board = self.board.player1, self.board.player2
             my_lives, opp_lives = self.lives[0], self.lives[1]
             my_passed = self.board.player1.passed
             opp_passed = self.board.player2.passed
         else:
-            my_score, opp_score = p2_score, p1_score
+            my_board, opp_board = self.board.player2, self.board.player1
             my_lives, opp_lives = self.lives[1], self.lives[0]
             my_passed = self.board.player2.passed
             opp_passed = self.board.player1.passed
 
+        weather_bits = [
+            1 if self.board.weather_rows[row] else 0
+            for row in WEATHER_STATE_ROWS
+        ]
         state = [
-            my_score,
-            opp_score,
+            *self._board_power_features(my_board, opp_board),
             my_lives,
             opp_lives,
             len(opponent_hand),
             1 if my_passed else 0,
             1 if opp_passed else 0,
+            *weather_bits,
         ] + hand_counts(active_hand)
 
         return np.array(state, dtype=np.float32)
@@ -79,7 +102,7 @@ class GwentEnv:
     def legal_mask_from_state(state: np.ndarray) -> np.ndarray:
         """Rebuild legal actions from a learner-perspective state vector."""
         mask = np.zeros(PASS_ACTION + 1, dtype=bool)
-        if state[5] >= 0.5:
+        if state[MY_PASSED_STATE_INDEX] >= 0.5:
             return mask
         for type_id in range(PASS_ACTION):
             if state[GLOBAL_STATE_SIZE + type_id] > 0:
@@ -261,7 +284,11 @@ class GwentEnv:
         elif 0 <= action < NUM_CARD_TYPES:
             card = self._remove_card_by_type(active_hand, action)
             played_power = card.current_power
-            self.board.place_card(acting_player, card)
+            if card.weather_row is not None:
+                self.board.apply_weather(card.weather_row)
+            else:
+                self.board.place_card(acting_player, card)
+                self.board.recompute_powers()
         else:
             raise ValueError(f"Invalid action: {action}")
 

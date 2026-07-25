@@ -17,6 +17,19 @@ ROW_LABELS = {
     "siege": "Siege",
 }
 
+WEATHER_CARD_COLOR = "#3d4f66"
+WEATHER_ROW_COLOR = "#9a9a9a"
+WEATHER_ACTIVE_COLOR = "#7eb8da"
+HERO_COLOR = "#6b5420"
+HERO_BORDER = "#c9a227"
+
+WEATHER_LABELS = {
+    "melee": "Frost",
+    "ranged": "Fog",
+    "siege": "Rain",
+    "clear": "Clear",
+}
+
 # Bottom player: melee nearest the center line, siege farthest.
 BOTTOM_ROW_ORDER = ("melee", "ranged", "siege")
 # Top player: mirrored
@@ -43,32 +56,56 @@ class CardWidget(ctk.CTkFrame):
         command: Callable[[], None] | None = None,
         enabled: bool = True,
     ):
-        fg_color = ROW_COLORS.get(card.row, "#333333")
+        is_weather = card.weather_row is not None
+        if is_weather:
+            fg_color = WEATHER_CARD_COLOR
+            border_width = 0
+            border_color = None
+        elif card.hero:
+            fg_color = HERO_COLOR
+            border_width = 2
+            border_color = HERO_BORDER
+        else:
+            fg_color = ROW_COLORS.get(card.row, "#333333")
+            border_width = 0
+            border_color = None
+
         if not enabled:
             fg_color = "#3a3a3a"
+            border_color = "#555555" if card.hero else border_color
 
-        super().__init__(
-            master,
-            fg_color=fg_color,
-            corner_radius=4,
-            width=CARD_WIDTH,
-            height=CARD_HEIGHT,
-        )
+        kwargs = {
+            "fg_color": fg_color,
+            "corner_radius": 4,
+            "width": CARD_WIDTH,
+            "height": CARD_HEIGHT,
+            "border_width": border_width,
+        }
+        if border_color is not None:
+            kwargs["border_color"] = border_color
+
+        super().__init__(master, **kwargs)
         self.pack_propagate(False)
 
+        muted = "#888888" if not enabled else None
         ctk.CTkLabel(
             self,
             text=card.name,
             font=ctk.CTkFont(size=10, weight="bold"),
             wraplength=CARD_WIDTH - 8,
-            text_color="#888888" if not enabled else None,
+            text_color=muted,
         ).pack(padx=4, pady=(6, 0))
+
+        if is_weather:
+            power_text = WEATHER_LABELS.get(card.weather_row, "W")
+        else:
+            power_text = str(card.current_power)
 
         ctk.CTkLabel(
             self,
-            text=str(card.current_power),
+            text=power_text,
             font=ctk.CTkFont(size=14, weight="bold"),
-            text_color="#888888" if not enabled else None,
+            text_color=muted if muted else (WEATHER_ACTIVE_COLOR if is_weather else None),
         ).pack(pady=(2, 6))
 
         if command and enabled:
@@ -115,8 +152,8 @@ class RowWidget(ctk.CTkFrame):
         self.score_label.pack(side="right", padx=(2, 4), pady=2)
 
         self.row_name = row_name
-    
-    def update(self, board: PlayerBoard, row_name: str):
+
+    def update(self, board: PlayerBoard, row_name: str, *, weather_active: bool = False):
         for child in self.slots.winfo_children():
             child.destroy()
 
@@ -124,6 +161,15 @@ class RowWidget(ctk.CTkFrame):
             CardWidget(self.slots, card).pack(side="left", padx=3, pady=2)
 
         self.score_label.configure(text=str(board.get_row_score(row_name)))
+
+        if weather_active:
+            self.configure(border_width=2, border_color=WEATHER_ROW_COLOR)
+            self.label.configure(text_color=WEATHER_ROW_COLOR)
+            self.score_label.configure(text_color=WEATHER_ROW_COLOR)
+        else:
+            self.configure(border_width=0)
+            self.label.configure(text_color=["#1a1a1a", "#ebebeb"])
+            self.score_label.configure(text_color=["#1a1a1a", "#ebebeb"])
 
 
 class PlayerWidget(ctk.CTkFrame):
@@ -246,9 +292,14 @@ class BoardWidget(ctk.CTkFrame):
             row.pack(fill="x", pady=1)
             self.row_widgets[name] = row
 
-    def update(self, board: PlayerBoard):
+    def update(self, board: PlayerBoard, weather_rows: dict[str, bool] | None = None):
+        weather_rows = weather_rows or {}
         for name in self.row_order:
-            self.row_widgets[name].update(board, name)
+            self.row_widgets[name].update(
+                board,
+                name,
+                weather_active=weather_rows.get(name, False),
+            )
 
 
 class HandWidget(ctk.CTkFrame):

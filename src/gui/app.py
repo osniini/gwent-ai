@@ -25,7 +25,10 @@ class GwentApp(ctk.CTk):
         self._round_continue_job = None
 
         self.agent = DQNAgent(self.env.state_size, self.env.action_size)
-        self.agent.load("models/gwent_agent_beta.pth")
+        try:
+            self.agent.load("models/gwent_agent_gamma.pth")
+        except Exception as exc:    
+            print(f"Could not load model (retrain needed): {exc}")
         self.agent.epsilon = 0  # no random exploration in the GUI
 
         self.title("Gwent")
@@ -57,8 +60,9 @@ class GwentApp(ctk.CTk):
             hand_count=len(self.env.hand1),
             power_leading=p1_leading,
         )
-        self.opponent_board.update(self.env.board.player2)
-        self.player_board.update(self.env.board.player1)
+        weather = self.env.board.weather_rows
+        self.opponent_board.update(self.env.board.player2, weather)
+        self.player_board.update(self.env.board.player1, weather)
 
         can_act = (
             self.env.current_player == 1
@@ -103,7 +107,9 @@ class GwentApp(ctk.CTk):
         self.refresh()
 
     def _on_step_complete(self, prev_lives: list[int], done: bool):
-        round_changed = self.env.lives != prev_lives or self.env.last_round_was_tie
+        # Lives always change when a round ends (including ties); do not use
+        # last_round_was_tie here — it stays True until the next round ends.
+        round_changed = self.env.lives != prev_lives
 
         if done:
             self.game_over = True
