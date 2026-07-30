@@ -102,6 +102,8 @@ class CardWidget(ctk.CTkFrame):
             power_text = WEATHER_LABELS.get(card.weather_row, "W")
         elif card.effect == "horn":
             power_text = "x2"
+        elif card.effect == "tight_bond":
+            power_text = f"TB · {card.current_power}"
         else:
             power_text = str(card.current_power)
 

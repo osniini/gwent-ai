@@ -19,7 +19,14 @@ PASS_ACTION = HORN_ACTION_START + len(HORN_ACTIONS)
 HERO_POWER_FEATURES = 2 * len(ROWS)
 # Per side: non-hero unit count and base power total per row (6), times 2 sides.
 BOARD_COMPOSITION_FEATURES = 2 * 2 * len(ROWS)
-BOARD_FEATURES = HERO_POWER_FEATURES + BOARD_COMPOSITION_FEATURES
+# Per side and row: count of each card type. This lets the agent identify
+# same-name units already present for effects such as Tight Bond.
+BOARD_CARD_COUNT_FEATURES = 2 * len(ROWS) * NUM_CARD_TYPES
+BOARD_FEATURES = (
+    HERO_POWER_FEATURES
+    + BOARD_COMPOSITION_FEATURES
+    + BOARD_CARD_COUNT_FEATURES
+)
 # [board features...] my_lives, opp_lives, opp_hand_len, my_passed, opp_passed, weather×3, horn×6
 MY_PASSED_STATE_INDEX = BOARD_FEATURES + 3
 MY_HORN_STATE_INDEX = BOARD_FEATURES + 5 + len(ROWS)
@@ -59,7 +66,7 @@ class GwentEnv:
 
     @staticmethod
     def _board_power_features(my_board, opp_board) -> list[int]:
-        """Hero power plus non-hero composition per row, for me then opponent."""
+        """Visible board power, composition, and per-row card-type counts."""
         features = []
         for board in (my_board, opp_board):
             features.extend(board.get_hero_power(row) for row in ROWS)
@@ -67,6 +74,12 @@ class GwentEnv:
             for row in ROWS:
                 unit_count, base_power_total = board.get_non_hero_composition(row)
                 features.extend((unit_count, base_power_total))
+        for board in (my_board, opp_board):
+            for row in ROWS:
+                row_counts = [0] * NUM_CARD_TYPES
+                for card in board.rows[row]:
+                    row_counts[card.type_id] += 1
+                features.extend(row_counts)
         return features
 
     def _get_state(self):

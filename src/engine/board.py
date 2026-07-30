@@ -1,3 +1,4 @@
+from collections import Counter
 from typing import List, Dict
 from src.engine.card import Card
 
@@ -92,15 +93,27 @@ class GameBoard:
         self.recompute_powers()
 
     def recompute_powers(self):
-        """Reset units, apply weather, then double horned non-hero rows."""
+        """Reset units, then apply weather, Tight Bond, and Commander's Horn."""
         for board in (self.player1, self.player2):
             for row, cards in board.rows.items():
                 for card in cards:
                     card.reset()
                     if self.weather_rows[row] and not card.hero:
                         card.current_power = 1
-                    if board.horn_rows[row] and not card.hero:
-                        card.current_power *= 2
+
+                tight_bond_counts = Counter(
+                    card.name
+                    for card in cards
+                    if card.effect == "tight_bond" and not card.hero
+                )
+                for card in cards:
+                    if card.effect == "tight_bond" and not card.hero:
+                        card.current_power *= tight_bond_counts[card.name]
+
+                if board.horn_rows[row]:
+                    for card in cards:
+                        if not card.hero:
+                            card.current_power *= 2
 
     def get_scores(self) -> tuple[int, int]:
         return (self.player1.get_total_score(), self.player2.get_total_score())
