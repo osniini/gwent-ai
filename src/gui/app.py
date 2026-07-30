@@ -125,6 +125,8 @@ class GwentApp(ctk.CTk):
 
         state = self.env._get_state()
         action = self.agent.select_action(state, legal)
+        if action == self.env.pass_action and self.env.lives[1] <= 1:
+            print(f"AI passed on final life with hand: {self.env.hand2}") # DEBUG print for final life pass
         self._apply_action(action)
 
     def _apply_action(self, action: int):
