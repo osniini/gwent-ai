@@ -15,22 +15,28 @@ HORN_ACTIONS = {
     for index, row in enumerate(ROWS)
 }
 PASS_ACTION = HORN_ACTION_START + len(HORN_ACTIONS)
-# Per side: non-hero then hero power for each of melee/ranged/siege (6), times 2 sides.
-BOARD_POWER_FEATURES = 2 * 2 * len(ROWS)
-# [board powers...] my_lives, opp_lives, opp_hand_len, my_passed, opp_passed, weather×3, horn×6
-MY_PASSED_STATE_INDEX = BOARD_POWER_FEATURES + 3
-MY_HORN_STATE_INDEX = BOARD_POWER_FEATURES + 5 + len(ROWS)
+# Per side: current hero power for each of melee/ranged/siege (3), times 2 sides.
+HERO_POWER_FEATURES = 2 * len(ROWS)
+# Per side: non-hero unit count and base power total per row (6), times 2 sides.
+BOARD_COMPOSITION_FEATURES = 2 * 2 * len(ROWS)
+BOARD_FEATURES = HERO_POWER_FEATURES + BOARD_COMPOSITION_FEATURES
+# [board features...] my_lives, opp_lives, opp_hand_len, my_passed, opp_passed, weather×3, horn×6
+MY_PASSED_STATE_INDEX = BOARD_FEATURES + 3
+MY_HORN_STATE_INDEX = BOARD_FEATURES + 5 + len(ROWS)
 GLOBAL_STATE_SIZE = MY_HORN_STATE_INDEX + 2 * len(ROWS)
 STARTING_LIVES = 2
+
 ROUND_WIN_REWARD = 0.5
 MATCH_WIN_REWARD = 1.0
-SCORE_DIFF_SCALE = 0.00
+SCORE_DIFF_SCALE = 0.01
 ROUND_SEALED_PASS_SCALE = 0.06
-CARD_PLAY_COST_SCALE = 0.05
+CARD_PLAY_COST_SCALE = 0.02
 CARD_PLAY_AHEAD_PENALTY_SCALE = 0.06
 ROUND_WIN_HAND_SAVE_SCALE = 0.06
 PASS_WITHOUT_LEAD_PENALTY = 0.15
 PASS_WHILE_LEADING_OPEN_PENALTY = 0.15
+WEATHER_RESERVE_VALUE = 4
+HORN_RESERVE_VALUE = 5
 
 
 class GwentEnv:
@@ -53,17 +59,14 @@ class GwentEnv:
 
     @staticmethod
     def _board_power_features(my_board, opp_board) -> list[int]:
-        """Non-hero then hero current power per row, for me then opponent."""
+        """Hero power plus non-hero composition per row, for me then opponent."""
         features = []
         for board in (my_board, opp_board):
-            non_hero = []
-            hero = []
+            features.extend(board.get_hero_power(row) for row in ROWS)
+        for board in (my_board, opp_board):
             for row in ROWS:
-                row_non_hero, row_hero = board.get_row_power_split(row)
-                non_hero.append(row_non_hero)
-                hero.append(row_hero)
-            features.extend(non_hero)
-            features.extend(hero)
+                unit_count, base_power_total = board.get_non_hero_composition(row)
+                features.extend((unit_count, base_power_total))
         return features
 
     def _get_state(self):
@@ -177,8 +180,17 @@ class GwentEnv:
         return diff if player == 1 else -diff
 
     @staticmethod
-    def _hand_power(hand: list) -> int:
-        return sum(card.current_power for card in hand)
+    def _card_reserve_value(card) -> int:
+        """Value a card's future strategic use for reward shaping."""
+        if card.weather_row is not None:
+            return WEATHER_RESERVE_VALUE
+        if card.effect == "horn":
+            return HORN_RESERVE_VALUE
+        return card.current_power
+
+    @classmethod
+    def _hand_value(cls, hand: list) -> int:
+        return sum(cls._card_reserve_value(card) for card in hand)
 
     def _opponent_board(self, player: int):
         return self.board.player1 if player == 2 else self.board.player2
@@ -216,22 +228,22 @@ class GwentEnv:
     def _card_play_ahead_penalty(
         self,
         player: int,
-        played_power: int,
+        played_value: int,
         score_after: float,
     ) -> float:
         """Discourage dumping cards while ahead only when saving them for another round matters."""
-        if played_power == 0 or score_after <= 0:
+        if played_value == 0 or score_after <= 0:
             return 0.0
         if self._opponent_board(player).passed:
             return 0.0
         scale = self._hand_save_value_scale(player)
         if scale == 0.0:
             return 0.0
-        return CARD_PLAY_AHEAD_PENALTY_SCALE * played_power * scale
+        return CARD_PLAY_AHEAD_PENALTY_SCALE * played_value * scale
 
     def _round_sealed_pass_bonus(self, player: int, hand: list, *, passed: bool) -> float:
         """Opponent passed and we are ahead — reward closing the round with cards saved."""
-        if not passed or self._hand_power(hand) == 0:
+        if not passed or self._hand_value(hand) == 0:
             return 0.0
         if not self._opponent_board(player).passed:
             return 0.0
@@ -240,27 +252,27 @@ class GwentEnv:
         scale = self._hand_save_value_scale(player)
         if scale == 0.0:
             return 0.0
-        return ROUND_SEALED_PASS_SCALE * self._hand_power(hand) * scale
+        return ROUND_SEALED_PASS_SCALE * self._hand_value(hand) * scale
 
     @staticmethod
     def _perspective_from_p1(player: int, p1_positive: float) -> float:
         return p1_positive if player == 1 else -p1_positive
 
     def _round_win_hand_bonus(self, player: int, outcome: int) -> float:
-        """Bonus for winning the round with unused hand power."""
+        """Bonus for winning the round with unused hand value."""
         if outcome == 0:
             return 0.0
         won = (outcome == 1 and player == 1) or (outcome == -1 and player == 2)
         if not won:
             return 0.0
         hand = self.hand1 if player == 1 else self.hand2
-        hand_power = self._hand_power(hand)
-        if hand_power == 0:
+        hand_value = self._hand_value(hand)
+        if hand_value == 0:
             return 0.0
         scale = self._hand_save_value_scale(player)
         if scale == 0.0:
             return 0.0
-        return ROUND_WIN_HAND_SAVE_SCALE * hand_power * scale
+        return ROUND_WIN_HAND_SAVE_SCALE * hand_value * scale
 
     def consume_deferred_round_reward(self, player: int) -> float:
         """Apply deferred round-end reward for a player who already ended their turn."""
@@ -302,13 +314,13 @@ class GwentEnv:
             raise ValueError(f"Illegal action: {action}")
 
         score_before = self._score_diff_for_player(acting_player)
-        played_power = 0
+        played_value = 0
 
         if action == self.pass_action:
             active_board.passed = True
         elif 0 <= action < NUM_CARD_TYPES:
             card = self._remove_card_by_type(active_hand, action)
-            played_power = card.current_power
+            played_value = self._card_reserve_value(card)
             if card.weather_row is not None:
                 self.board.apply_weather(card.weather_row)
             else:
@@ -316,7 +328,8 @@ class GwentEnv:
                 self.board.recompute_powers()
         elif action in HORN_ACTIONS.values():
             row = next(row for row, horn_action in HORN_ACTIONS.items() if horn_action == action)
-            self._remove_card_by_type(active_hand, HORN_CARD_TYPE)
+            card = self._remove_card_by_type(active_hand, HORN_CARD_TYPE)
+            played_value = self._card_reserve_value(card)
             self.board.apply_horn(acting_player, row)
         else:
             raise ValueError(f"Invalid action: {action}")
@@ -325,15 +338,15 @@ class GwentEnv:
         reward = SCORE_DIFF_SCALE * (score_after - score_before)
 
         if action != self.pass_action:
-            # Only tax card spend when saved hand power can matter next round.
+            # Tax spending a card's future strategic value when saving it can matter.
             reward -= (
                 CARD_PLAY_COST_SCALE
-                * played_power
+                * played_value
                 * self._hand_save_value_scale(acting_player)
             )
             reward -= self._card_play_ahead_penalty(
                 acting_player,
-                played_power,
+                played_value,
                 score_after,
             )
 

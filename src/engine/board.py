@@ -28,16 +28,14 @@ class PlayerBoard:
     def get_row_score(self, row: str) -> int:
         return sum(card.current_power for card in self.rows[row])
 
-    def get_row_power_split(self, row: str) -> tuple[int, int]:
-        """Return (non_hero_power, hero_power) for a row using current powers."""
-        non_hero = 0
-        hero = 0
-        for card in self.rows[row]:
-            if card.hero:
-                hero += card.current_power
-            else:
-                non_hero += card.current_power
-        return non_hero, hero
+    def get_hero_power(self, row: str) -> int:
+        """Return the current total power of a row's hero units."""
+        return sum(card.current_power for card in self.rows[row] if card.hero)
+
+    def get_non_hero_composition(self, row: str) -> tuple[int, int]:
+        """Return (unit_count, base_power_total) for a row's non-hero units."""
+        non_heroes = [card for card in self.rows[row] if not card.hero]
+        return len(non_heroes), sum(card.base_power for card in non_heroes)
 
     def get_total_score(self) -> int:
         return sum(self.get_row_score(row) for row in self.rows)
