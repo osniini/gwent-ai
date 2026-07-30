@@ -12,6 +12,7 @@ CARD_CATALOG = [
     {"name": "Ciri", "power": 15, "row": "melee", "hero": True, "unique": True},
     {"name": "Poor Fucking Infantry", "power": 1, "row": "melee", "effect": "tight_bond"},
     {"name": "Vesemir", "power": 6, "row": "melee", "unique": True},
+    {"name": "Kaedweni Siege Expert", "power": 1, "row": "siege", "effect": "morale_boost"},
     {"name": "Triss", "power": 7, "row": "melee", "hero": True, "unique": True},
     {"name": "Philippa Eilhart", "power": 10, "row": "ranged", "hero": True, "unique": True},
     {"name": "Thaler", "power": 1, "row": "siege", "unique": True},
@@ -24,7 +25,7 @@ CARD_CATALOG = [
     {"name": "Torrential Rain", "weather_row": "siege"},
     {"name": "Clear Weather", "weather_row": "clear"},
     {"name": "Commander's Horn", "effect": "horn"},
-    {"name": "Kaedweni Siege Expert", "power": 1, "row": "siege", "effect": "morale_boost"},
+    {"name": "Decoy", "effect": "decoy"},
 ]
 
 CARD_BY_NAME = {entry["name"]: i for i, entry in enumerate(CARD_CATALOG)}
@@ -48,6 +49,7 @@ class Card:
         self.hero = stats.get("hero", False)
         self.unique = stats.get("unique", False)
         self.effect = stats.get("effect")
+        self.unit = stats.get("unit", self.row is not None)
 
     def reset(self):
         """Reset card power to its base value."""

@@ -2,6 +2,7 @@ import numpy as np
 from src.engine.board import GameBoard
 from src.engine.card import (
     CARD_BY_NAME,
+    CARD_CATALOG,
     NUM_CARD_TYPES,
     create_random_deck,
     hand_counts,
@@ -9,16 +10,27 @@ from src.engine.card import (
 
 ROWS = ("melee", "ranged", "siege")
 HORN_CARD_TYPE = CARD_BY_NAME["Commander's Horn"]
+DECOY_CARD_TYPE = CARD_BY_NAME["Decoy"]
 HORN_ACTION_START = NUM_CARD_TYPES
 HORN_ACTIONS = {
     row: HORN_ACTION_START + index
     for index, row in enumerate(ROWS)
 }
-PASS_ACTION = HORN_ACTION_START + len(HORN_ACTIONS)
+DECOY_ACTION_START = HORN_ACTION_START + len(HORN_ACTIONS)
+DECOY_ACTIONS = {
+    type_id: DECOY_ACTION_START + index
+    for index, (type_id, card) in enumerate(
+        (type_id, card)
+        for type_id, card in enumerate(CARD_CATALOG)
+        if card.get("row") is not None and not card.get("hero", False)
+    )
+}
+PASS_ACTION = DECOY_ACTION_START + len(DECOY_ACTIONS)
 # Per side: current hero power for each of melee/ranged/siege (3), times 2 sides.
 HERO_POWER_FEATURES = 2 * len(ROWS)
 # Per side: non-hero unit count and base power total per row (6), times 2 sides.
 BOARD_COMPOSITION_FEATURES = 2 * 2 * len(ROWS)
+MY_BOARD_CARD_COUNT_STATE_INDEX = HERO_POWER_FEATURES + BOARD_COMPOSITION_FEATURES
 # Per side and row: count of each card type. This lets the agent identify
 # same-name units already present for effects such as Tight Bond.
 BOARD_CARD_COUNT_FEATURES = 2 * len(ROWS) * NUM_CARD_TYPES
@@ -44,6 +56,7 @@ PASS_WITHOUT_LEAD_PENALTY = 0.15
 PASS_WHILE_LEADING_OPEN_PENALTY = 0.15
 WEATHER_RESERVE_VALUE = 4
 HORN_RESERVE_VALUE = 5
+DECOY_RESERVE_VALUE = 3
 
 
 class GwentEnv:
@@ -134,12 +147,27 @@ class GwentEnv:
         if state[MY_PASSED_STATE_INDEX] >= 0.5:
             return mask
         for type_id in range(NUM_CARD_TYPES):
-            if type_id != HORN_CARD_TYPE and state[GLOBAL_STATE_SIZE + type_id] > 0:
+            if (
+                type_id not in (HORN_CARD_TYPE, DECOY_CARD_TYPE)
+                and state[GLOBAL_STATE_SIZE + type_id] > 0
+            ):
                 mask[type_id] = True
         if state[GLOBAL_STATE_SIZE + HORN_CARD_TYPE] > 0:
             for index, row in enumerate(ROWS):
                 if state[MY_HORN_STATE_INDEX + index] < 0.5:
                     mask[HORN_ACTIONS[row]] = True
+        if state[GLOBAL_STATE_SIZE + DECOY_CARD_TYPE] > 0:
+            for type_id, action in DECOY_ACTIONS.items():
+                on_my_board = sum(
+                    state[
+                        MY_BOARD_CARD_COUNT_STATE_INDEX
+                        + row_index * NUM_CARD_TYPES
+                        + type_id
+                    ]
+                    for row_index in range(len(ROWS))
+                )
+                if on_my_board > 0:
+                    mask[action] = True
         mask[PASS_ACTION] = True
         return mask
 
@@ -170,11 +198,19 @@ class GwentEnv:
             return mask
 
         for type_id, count in enumerate(hand_counts(active_hand)):
-            if type_id != HORN_CARD_TYPE and count > 0:
+            if type_id not in (HORN_CARD_TYPE, DECOY_CARD_TYPE) and count > 0:
                 mask[type_id] = True
             elif type_id == HORN_CARD_TYPE and count > 0:
                 for row, action in HORN_ACTIONS.items():
                     if not active_board.horn_rows[row]:
+                        mask[action] = True
+            elif type_id == DECOY_CARD_TYPE and count > 0:
+                for target_type_id, action in DECOY_ACTIONS.items():
+                    if any(
+                        card.type_id == target_type_id
+                        for row in ROWS
+                        for card in active_board.rows[row]
+                    ):
                         mask[action] = True
 
         mask[self.pass_action] = True
@@ -199,6 +235,8 @@ class GwentEnv:
             return WEATHER_RESERVE_VALUE
         if card.effect == "horn":
             return HORN_RESERVE_VALUE
+        if card.effect == "decoy":
+            return DECOY_RESERVE_VALUE
         return card.current_power
 
     @classmethod
@@ -317,7 +355,7 @@ class GwentEnv:
             self.deferred_round_rewards[player] = reward
 
     def step(self, action: int):
-        """Execute a card, targeted Horn, or pass action."""
+        """Execute a card, targeted Horn or Decoy, or pass action."""
 
         acting_player = self.current_player
         active_board = self.board.player1 if acting_player == 1 else self.board.player2
@@ -344,6 +382,20 @@ class GwentEnv:
             card = self._remove_card_by_type(active_hand, HORN_CARD_TYPE)
             played_value = self._card_reserve_value(card)
             self.board.apply_horn(acting_player, row)
+        elif action in DECOY_ACTIONS.values():
+            target_type_id = next(
+                type_id
+                for type_id, decoy_action in DECOY_ACTIONS.items()
+                if decoy_action == action
+            )
+            card = self._remove_card_by_type(active_hand, DECOY_CARD_TYPE)
+            played_value = self._card_reserve_value(card)
+            returned_card = self.board.replace_with_decoy(
+                acting_player,
+                target_type_id,
+                card,
+            )
+            active_hand.append(returned_card)
         else:
             raise ValueError(f"Invalid action: {action}")
 

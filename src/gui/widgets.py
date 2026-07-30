@@ -106,6 +106,8 @@ class CardWidget(ctk.CTkFrame):
             power_text = f"TB · {card.current_power}"
         elif card.effect == "morale_boost":
             power_text = f"MB · {card.current_power}"
+        elif card.effect == "decoy":
+            power_text = "⇄"
         else:
             power_text = str(card.current_power)
 
@@ -178,12 +180,23 @@ class RowWidget(ctk.CTkFrame):
         weather_active: bool = False,
         selectable: bool = False,
         on_click: Callable[[str], None] | None = None,
+        selectable_card_types: set[int] | None = None,
+        on_card_click: Callable[[int], None] | None = None,
     ):
         for child in self.slots.winfo_children():
             child.destroy()
 
         for card in board.rows[row_name]:
-            CardWidget(self.slots, card).pack(side="left", padx=3, pady=2)
+            card_is_selectable = (
+                selectable_card_types is not None
+                and card.type_id in selectable_card_types
+            )
+            command = None
+            if selectable and on_click is not None:
+                command = lambda: on_click(row_name)
+            elif card_is_selectable and on_card_click is not None:
+                command = lambda type_id=card.type_id: on_card_click(type_id)
+            CardWidget(self.slots, card, command=command).pack(side="left", padx=3, pady=2)
 
         self.score_label.configure(text=str(board.get_row_score(row_name)))
         self.horn_label.configure(text="HORN" if board.horn_rows[row_name] else "")
@@ -207,17 +220,18 @@ class RowWidget(ctk.CTkFrame):
         self._set_click_handler(on_click if selectable else None)
 
     def _set_click_handler(self, on_click: Callable[[str], None] | None) -> None:
-        def bind_recursive(widget):
+        def bind_widget(widget):
             if on_click is None:
                 widget.unbind("<Button-1>")
                 widget.configure(cursor="")
             else:
                 widget.bind("<Button-1>", lambda _event: on_click(self.row_name))
                 widget.configure(cursor="hand2")
-            for child in widget.winfo_children():
-                bind_recursive(child)
 
-        bind_recursive(self)
+        # Card widgets manage their own commands. Binding recursively here
+        # would remove the Decoy target handlers created during update().
+        for widget in (self, self.label, self.slots, self.score_label, self.horn_label):
+            bind_widget(widget)
 
 
 class PlayerWidget(ctk.CTkFrame):
@@ -347,6 +361,8 @@ class BoardWidget(ctk.CTkFrame):
         *,
         selectable_rows: set[str] | None = None,
         on_row_click: Callable[[str], None] | None = None,
+        selectable_card_types: set[int] | None = None,
+        on_card_click: Callable[[int], None] | None = None,
     ):
         weather_rows = weather_rows or {}
         selectable_rows = selectable_rows or set()
@@ -357,6 +373,8 @@ class BoardWidget(ctk.CTkFrame):
                 weather_active=weather_rows.get(name, False),
                 selectable=name in selectable_rows,
                 on_click=on_row_click,
+                selectable_card_types=selectable_card_types,
+                on_card_click=on_card_click,
             )
 
 

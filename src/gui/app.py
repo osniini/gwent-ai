@@ -2,7 +2,13 @@ import numpy as np
 import customtkinter as ctk
 from src.ai.agent import DQNAgent
 from src.engine.card import NUM_CARD_TYPES
-from src.engine.gwent_env import GwentEnv, HORN_ACTIONS, HORN_CARD_TYPE
+from src.engine.gwent_env import (
+    DECOY_ACTIONS,
+    DECOY_CARD_TYPE,
+    GwentEnv,
+    HORN_ACTIONS,
+    HORN_CARD_TYPE,
+)
 from src.gui.widgets import (
     BoardWidget,
     BOTTOM_ROW_ORDER,
@@ -23,6 +29,7 @@ class GwentApp(ctk.CTk):
         self.game_over = False
         self.round_paused = False
         self.pending_horn = False
+        self.pending_decoy = False
         self._ai_job = None
         self._round_continue_job = None
 
@@ -70,9 +77,14 @@ class GwentApp(ctk.CTk):
         )
         legal = self.env.get_legal_actions() if can_act else np.zeros(self.env.action_size, dtype=bool)
         selecting_horn = self.pending_horn and can_act
+        selecting_decoy = self.pending_decoy and can_act
         selectable_rows = {
             row for row, action in HORN_ACTIONS.items()
             if selecting_horn and legal[action]
+        }
+        selectable_card_types = {
+            type_id for type_id, action in DECOY_ACTIONS.items()
+            if selecting_decoy and legal[action]
         }
         playable_card_types = {
             type_id for type_id in range(NUM_CARD_TYPES)
@@ -80,7 +92,9 @@ class GwentApp(ctk.CTk):
         }
         if any(legal[action] for action in HORN_ACTIONS.values()):
             playable_card_types.add(HORN_CARD_TYPE)
-        if selecting_horn:
+        if any(legal[action] for action in DECOY_ACTIONS.values()):
+            playable_card_types.add(DECOY_CARD_TYPE)
+        if selecting_horn or selecting_decoy:
             playable_card_types = set()
 
         weather = self.env.board.weather_rows
@@ -90,18 +104,24 @@ class GwentApp(ctk.CTk):
             weather,
             selectable_rows=selectable_rows,
             on_row_click=self.on_select_horn_row if selecting_horn else None,
+            selectable_card_types=selectable_card_types,
+            on_card_click=self.on_select_decoy_target if selecting_decoy else None,
         )
         self.horn_instruction.configure(
-            text="Select a highlighted row for Commander's Horn (Esc to cancel)."
-            if selecting_horn
-            else ""
+            text=(
+                "Select a highlighted row for Commander's Horn (Esc to cancel)."
+                if selecting_horn
+                else "Select one of your units to replace with Decoy (Esc to cancel)."
+                if selecting_decoy
+                else ""
+            )
         )
 
         self.player_hand.update(
             self.env.hand1,
-            on_click=self.on_play_card if can_act and not selecting_horn else None,
+            on_click=self.on_play_card if can_act and not selecting_horn and not selecting_decoy else None,
             legal=legal,
-            on_pass=self.on_pass if can_act and not selecting_horn else None,
+            on_pass=self.on_pass if can_act and not selecting_horn and not selecting_decoy else None,
             playable_card_types=playable_card_types,
         )
 
@@ -205,6 +225,7 @@ class GwentApp(ctk.CTk):
         self.game_over = False
         self.round_paused = False
         self.pending_horn = False
+        self.pending_decoy = False
         self._hide_overlay()
         self.refresh()
 
@@ -259,6 +280,7 @@ class GwentApp(ctk.CTk):
             self.game_over
             or self.round_paused
             or self.pending_horn
+            or self.pending_decoy
             or self.env.current_player != 1
         ):
             return
@@ -267,6 +289,11 @@ class GwentApp(ctk.CTk):
         if type_id == HORN_CARD_TYPE:
             if any(legal[action] for action in HORN_ACTIONS.values()):
                 self.pending_horn = True
+                self.refresh()
+            return
+        if type_id == DECOY_CARD_TYPE:
+            if any(legal[action] for action in DECOY_ACTIONS.values()):
+                self.pending_decoy = True
                 self.refresh()
             return
         if type_id >= len(legal) or not legal[type_id]:
@@ -284,13 +311,24 @@ class GwentApp(ctk.CTk):
         self.pending_horn = False
         self._apply_action(action)
 
+    def on_select_decoy_target(self, type_id: int):
+        if not self.pending_decoy:
+            return
+        action = DECOY_ACTIONS.get(type_id)
+        legal = self.env.get_legal_actions()
+        if action is None or not legal[action]:
+            return
+        self.pending_decoy = False
+        self._apply_action(action)
+
     def _cancel_horn_selection(self, _event=None):
-        if self.pending_horn:
+        if self.pending_horn or self.pending_decoy:
             self.pending_horn = False
+            self.pending_decoy = False
             self.refresh()
 
     def on_pass(self):
-        if self.pending_horn:
+        if self.pending_horn or self.pending_decoy:
             return
         self._apply_action(self.env.pass_action)
 
