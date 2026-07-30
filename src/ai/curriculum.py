@@ -8,7 +8,7 @@ from src.ai.model import DuelingQNetwork
 
 PHASE1_FRAC = 0.0
 PHASE2_FRAC = 0.0
-OPPO_CHECKPOINT_KEEP = 8
+OPPO_CHECKPOINT_KEEP = 32
 
 
 def training_phase(episodes_done: int, num_episodes: int) -> str:

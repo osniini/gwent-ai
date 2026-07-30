@@ -1,7 +1,8 @@
 import numpy as np
 import customtkinter as ctk
 from src.ai.agent import DQNAgent
-from src.engine.gwent_env import GwentEnv
+from src.engine.card import NUM_CARD_TYPES
+from src.engine.gwent_env import GwentEnv, HORN_ACTIONS, HORN_CARD_TYPE
 from src.gui.widgets import (
     BoardWidget,
     BOTTOM_ROW_ORDER,
@@ -21,18 +22,23 @@ class GwentApp(ctk.CTk):
         self.env.reset()
         self.game_over = False
         self.round_paused = False
+        self.pending_horn = False
         self._ai_job = None
         self._round_continue_job = None
 
         self.agent = DQNAgent(self.env.state_size, self.env.action_size)
-        self.agent.load("models/gwent_agent_beta.pth")
+        try:
+            self.agent.load("models/gwent_agent_gamma.pth")
+        except Exception as exc:    
+            print(f"Could not load model (retrain needed): {exc}")
         self.agent.epsilon = 0  # no random exploration in the GUI
 
         self.title("Gwent")
-        self.geometry("1000x750")
+        self.geometry("1000x780")
         self.resizable(False, False)
 
         self.build_ui()
+        self.bind("<Escape>", self._cancel_horn_selection)
         self.refresh()
 
     def refresh(self):
@@ -57,21 +63,46 @@ class GwentApp(ctk.CTk):
             hand_count=len(self.env.hand1),
             power_leading=p1_leading,
         )
-        self.opponent_board.update(self.env.board.player2)
-        self.player_board.update(self.env.board.player1)
-
         can_act = (
             self.env.current_player == 1
             and not self.game_over
             and not self.round_paused
         )
         legal = self.env.get_legal_actions() if can_act else np.zeros(self.env.action_size, dtype=bool)
+        selecting_horn = self.pending_horn and can_act
+        selectable_rows = {
+            row for row, action in HORN_ACTIONS.items()
+            if selecting_horn and legal[action]
+        }
+        playable_card_types = {
+            type_id for type_id in range(NUM_CARD_TYPES)
+            if legal[type_id]
+        }
+        if any(legal[action] for action in HORN_ACTIONS.values()):
+            playable_card_types.add(HORN_CARD_TYPE)
+        if selecting_horn:
+            playable_card_types = set()
+
+        weather = self.env.board.weather_rows
+        self.opponent_board.update(self.env.board.player2, weather)
+        self.player_board.update(
+            self.env.board.player1,
+            weather,
+            selectable_rows=selectable_rows,
+            on_row_click=self.on_select_horn_row if selecting_horn else None,
+        )
+        self.horn_instruction.configure(
+            text="Select a highlighted row for Commander's Horn (Esc to cancel)."
+            if selecting_horn
+            else ""
+        )
 
         self.player_hand.update(
             self.env.hand1,
-            on_click=self.on_play_card if can_act else None,
+            on_click=self.on_play_card if can_act and not selecting_horn else None,
             legal=legal,
-            on_pass=self.on_pass if can_act else None,
+            on_pass=self.on_pass if can_act and not selecting_horn else None,
+            playable_card_types=playable_card_types,
         )
 
         if self.env.current_player == 2 and not self.game_over and not self.round_paused:
@@ -94,6 +125,8 @@ class GwentApp(ctk.CTk):
 
         state = self.env._get_state()
         action = self.agent.select_action(state, legal)
+        if action == self.env.pass_action and self.env.lives[1] <= 1:
+            print(f"AI passed on final life with hand: {self.env.hand2}") # DEBUG print for final life pass
         self._apply_action(action)
 
     def _apply_action(self, action: int):
@@ -103,7 +136,9 @@ class GwentApp(ctk.CTk):
         self.refresh()
 
     def _on_step_complete(self, prev_lives: list[int], done: bool):
-        round_changed = self.env.lives != prev_lives or self.env.last_round_was_tie
+        # Lives always change when a round ends (including ties); do not use
+        # last_round_was_tie here — it stays True until the next round ends.
+        round_changed = self.env.lives != prev_lives
 
         if done:
             self.game_over = True
@@ -169,6 +204,7 @@ class GwentApp(ctk.CTk):
         self.env.reset()
         self.game_over = False
         self.round_paused = False
+        self.pending_horn = False
         self._hide_overlay()
         self.refresh()
 
@@ -195,8 +231,15 @@ class GwentApp(ctk.CTk):
         self.player_board.pack(side="left", fill="both", expand=True)
 
         # Player hand
+        self.horn_instruction = ctk.CTkLabel(
+            container,
+            text="",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color="#d8a137",
+        )
+        self.horn_instruction.pack(fill="x", pady=(8, 0))
         self.player_hand = HandWidget(container)
-        self.player_hand.pack(fill="x", pady=(8, 0))
+        self.player_hand.pack(fill="x", pady=(4, 0))
 
         self.overlay = ctk.CTkFrame(self, fg_color="#1a1a1a", corner_radius=8, border_width=1, border_color="#666666")
         self.overlay_message = ctk.CTkLabel(
@@ -212,16 +255,43 @@ class GwentApp(ctk.CTk):
         self.new_game_btn = ctk.CTkButton(self.overlay, text="New Game", width=120, command=self.new_game)
 
     def on_play_card(self, type_id: int):
-        if self.game_over or self.round_paused or self.env.current_player != 1:
+        if (
+            self.game_over
+            or self.round_paused
+            or self.pending_horn
+            or self.env.current_player != 1
+        ):
             return
 
         legal = self.env.get_legal_actions()
+        if type_id == HORN_CARD_TYPE:
+            if any(legal[action] for action in HORN_ACTIONS.values()):
+                self.pending_horn = True
+                self.refresh()
+            return
         if type_id >= len(legal) or not legal[type_id]:
             return
 
         self._apply_action(type_id)
 
+    def on_select_horn_row(self, row: str):
+        if not self.pending_horn:
+            return
+        action = HORN_ACTIONS[row]
+        legal = self.env.get_legal_actions()
+        if not legal[action]:
+            return
+        self.pending_horn = False
+        self._apply_action(action)
+
+    def _cancel_horn_selection(self, _event=None):
+        if self.pending_horn:
+            self.pending_horn = False
+            self.refresh()
+
     def on_pass(self):
+        if self.pending_horn:
+            return
         self._apply_action(self.env.pass_action)
 
 

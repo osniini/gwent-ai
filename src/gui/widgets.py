@@ -1,7 +1,7 @@
 from collections.abc import Callable
 
 import customtkinter as ctk
-from src.engine.card import Card, PASS_ACTION
+from src.engine.card import Card
 from src.engine.board import PlayerBoard
 
 
@@ -15,6 +15,21 @@ ROW_LABELS = {
     "melee": "Melee",
     "ranged": "Ranged",
     "siege": "Siege",
+}
+
+WEATHER_CARD_COLOR = "#3d4f66"
+WEATHER_ROW_COLOR = "#9a9a9a"
+WEATHER_ACTIVE_COLOR = "#7eb8da"
+HORN_COLOR = "#d8a137"
+ROW_SELECTION_COLOR = "#4ade80"
+HERO_COLOR = "#6b5420"
+HERO_BORDER = "#c9a227"
+
+WEATHER_LABELS = {
+    "melee": "Frost",
+    "ranged": "Fog",
+    "siege": "Rain",
+    "clear": "Clear",
 }
 
 # Bottom player: melee nearest the center line, siege farthest.
@@ -43,32 +58,58 @@ class CardWidget(ctk.CTkFrame):
         command: Callable[[], None] | None = None,
         enabled: bool = True,
     ):
-        fg_color = ROW_COLORS.get(card.row, "#333333")
+        is_weather = card.weather_row is not None
+        if is_weather:
+            fg_color = WEATHER_CARD_COLOR
+            border_width = 0
+            border_color = None
+        elif card.hero:
+            fg_color = ROW_COLORS.get(card.row, "#333333")
+            border_width = 2
+            border_color = HERO_BORDER
+        else:
+            fg_color = ROW_COLORS.get(card.row, "#333333")
+            border_width = 0
+            border_color = None
+
         if not enabled:
             fg_color = "#3a3a3a"
+            border_color = "#555555" if card.hero else border_color
 
-        super().__init__(
-            master,
-            fg_color=fg_color,
-            corner_radius=4,
-            width=CARD_WIDTH,
-            height=CARD_HEIGHT,
-        )
+        kwargs = {
+            "fg_color": fg_color,
+            "corner_radius": 4,
+            "width": CARD_WIDTH,
+            "height": CARD_HEIGHT,
+            "border_width": border_width,
+        }
+        if border_color is not None:
+            kwargs["border_color"] = border_color
+
+        super().__init__(master, **kwargs)
         self.pack_propagate(False)
 
+        muted = "#888888" if not enabled else None
         ctk.CTkLabel(
             self,
             text=card.name,
             font=ctk.CTkFont(size=10, weight="bold"),
             wraplength=CARD_WIDTH - 8,
-            text_color="#888888" if not enabled else None,
+            text_color=muted,
         ).pack(padx=4, pady=(6, 0))
+
+        if is_weather:
+            power_text = WEATHER_LABELS.get(card.weather_row, "W")
+        elif card.effect == "horn":
+            power_text = "x2"
+        else:
+            power_text = str(card.current_power)
 
         ctk.CTkLabel(
             self,
-            text=str(card.current_power),
+            text=power_text,
             font=ctk.CTkFont(size=14, weight="bold"),
-            text_color="#888888" if not enabled else None,
+            text_color=muted if muted else (WEATHER_ACTIVE_COLOR if is_weather else None),
         ).pack(pady=(2, 6))
 
         if command and enabled:
@@ -114,9 +155,26 @@ class RowWidget(ctk.CTkFrame):
         )
         self.score_label.pack(side="right", padx=(2, 4), pady=2)
 
+        self.horn_label = ctk.CTkLabel(
+            self,
+            text="",
+            width=42,
+            font=ctk.CTkFont(size=10, weight="bold"),
+            text_color=HORN_COLOR,
+        )
+        self.horn_label.pack(side="right", padx=(2, 0), pady=2)
+
         self.row_name = row_name
-    
-    def update(self, board: PlayerBoard, row_name: str):
+
+    def update(
+        self,
+        board: PlayerBoard,
+        row_name: str,
+        *,
+        weather_active: bool = False,
+        selectable: bool = False,
+        on_click: Callable[[str], None] | None = None,
+    ):
         for child in self.slots.winfo_children():
             child.destroy()
 
@@ -124,6 +182,38 @@ class RowWidget(ctk.CTkFrame):
             CardWidget(self.slots, card).pack(side="left", padx=3, pady=2)
 
         self.score_label.configure(text=str(board.get_row_score(row_name)))
+        self.horn_label.configure(text="HORN" if board.horn_rows[row_name] else "")
+
+        if selectable:
+            border_color = ROW_SELECTION_COLOR
+        elif weather_active:
+            border_color = WEATHER_ROW_COLOR
+        elif board.horn_rows[row_name]:
+            border_color = HORN_COLOR
+        else:
+            border_color = None
+
+        if border_color:
+            self.configure(border_width=2, border_color=border_color)
+        else:
+            self.configure(border_width=0)
+        label_color = WEATHER_ROW_COLOR if weather_active else ["#1a1a1a", "#ebebeb"]
+        self.label.configure(text_color=label_color)
+        self.score_label.configure(text_color=label_color)
+        self._set_click_handler(on_click if selectable else None)
+
+    def _set_click_handler(self, on_click: Callable[[str], None] | None) -> None:
+        def bind_recursive(widget):
+            if on_click is None:
+                widget.unbind("<Button-1>")
+                widget.configure(cursor="")
+            else:
+                widget.bind("<Button-1>", lambda _event: on_click(self.row_name))
+                widget.configure(cursor="hand2")
+            for child in widget.winfo_children():
+                bind_recursive(child)
+
+        bind_recursive(self)
 
 
 class PlayerWidget(ctk.CTkFrame):
@@ -246,9 +336,24 @@ class BoardWidget(ctk.CTkFrame):
             row.pack(fill="x", pady=1)
             self.row_widgets[name] = row
 
-    def update(self, board: PlayerBoard):
+    def update(
+        self,
+        board: PlayerBoard,
+        weather_rows: dict[str, bool] | None = None,
+        *,
+        selectable_rows: set[str] | None = None,
+        on_row_click: Callable[[str], None] | None = None,
+    ):
+        weather_rows = weather_rows or {}
+        selectable_rows = selectable_rows or set()
         for name in self.row_order:
-            self.row_widgets[name].update(board, name)
+            self.row_widgets[name].update(
+                board,
+                name,
+                weather_active=weather_rows.get(name, False),
+                selectable=name in selectable_rows,
+                on_click=on_row_click,
+            )
 
 
 class HandWidget(ctk.CTkFrame):
@@ -278,16 +383,20 @@ class HandWidget(ctk.CTkFrame):
         on_click: Callable[[int], None] | None = None,
         legal=None,
         on_pass: Callable[[], None] | None = None,
+        playable_card_types: set[int] | None = None,
     ):
         for child in self.slots.winfo_children():
             child.destroy()
 
         for card in cards:
-            is_legal = (
-                bool(legal[card.type_id])
-                if legal is not None and card.type_id < len(legal)
-                else True
-            )
+            if playable_card_types is not None:
+                is_legal = card.type_id in playable_card_types
+            else:
+                is_legal = (
+                    bool(legal[card.type_id])
+                    if legal is not None and card.type_id < len(legal)
+                    else True
+                )
             command = (
                 (lambda type_id=card.type_id: on_click(type_id))
                 if on_click and is_legal
@@ -298,8 +407,8 @@ class HandWidget(ctk.CTkFrame):
             )
 
         can_pass = (
-            bool(legal[PASS_ACTION])
-            if legal is not None and len(legal) > PASS_ACTION
+            bool(legal[-1])
+            if legal is not None and len(legal) > 0
             else True
         )
         self.pass_btn.configure(

@@ -9,7 +9,7 @@ from src.ai.curriculum import (
 )
 from src.ai.opponents import LEARNER_PLAYER, greedy_action, random_action
 
-NUM_EPISODES = 30000
+NUM_EPISODES = 60000
 NUM_ENVS = 32
 TRAIN_EVERY = 4
 TRAIN_STEPS_PER_UPDATE = 3
@@ -214,7 +214,7 @@ def train_gwent(
             if episodes_done < num_episodes:
                 _reset_tracker(tracker)
 
-    agent.save("models/gwent_agent_beta.pth")
+    agent.save("models/gwent_agent_gamma.pth")
 
 
 if __name__ == "__main__":
