@@ -24,6 +24,7 @@ CARD_CATALOG = [
     {"name": "Torrential Rain", "weather_row": "siege"},
     {"name": "Clear Weather", "weather_row": "clear"},
     {"name": "Commander's Horn", "effect": "horn"},
+    {"name": "Kaedweni Siege Expert", "power": 1, "row": "siege", "effect": "morale_boost"},
 ]
 
 CARD_BY_NAME = {entry["name"]: i for i, entry in enumerate(CARD_CATALOG)}

@@ -93,7 +93,7 @@ class GameBoard:
         self.recompute_powers()
 
     def recompute_powers(self):
-        """Reset units, then apply weather, Tight Bond, and Commander's Horn."""
+        """Reset units, then apply weather, Tight Bond, Horn, and Morale Boost."""
         for board in (self.player1, self.player2):
             for row, cards in board.rows.items():
                 for card in cards:
@@ -114,6 +114,17 @@ class GameBoard:
                     for card in cards:
                         if not card.hero:
                             card.current_power *= 2
+
+                morale_boost_count = sum(
+                    card.effect == "morale_boost"
+                    for card in cards
+                )
+                if morale_boost_count:
+                    for card in cards:
+                        # Every Morale Boost unit adds +1 to every other unit
+                        # on its row; boosts can therefore affect each other.
+                        own_boost = 1 if card.effect == "morale_boost" else 0
+                        card.current_power += morale_boost_count - own_boost
 
     def get_scores(self) -> tuple[int, int]:
         return (self.player1.get_total_score(), self.player2.get_total_score())

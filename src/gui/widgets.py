@@ -104,6 +104,8 @@ class CardWidget(ctk.CTkFrame):
             power_text = "x2"
         elif card.effect == "tight_bond":
             power_text = f"TB · {card.current_power}"
+        elif card.effect == "morale_boost":
+            power_text = f"MB · {card.current_power}"
         else:
             power_text = str(card.current_power)
 
