@@ -364,8 +364,24 @@ class GwentEnv:
         self.redraw_returns[player].append(redrawn_card)
         self.redraws_remaining[player] -= 1
 
+    def _play_muster_cards(self, player: int, hand: list, deck: list, name: str) -> None:
+        """Deploy every remaining copy of a Muster card from hand and deck."""
+        mustered_from_hand = [card for card in hand if card.name == name]
+        mustered_from_deck = [card for card in deck if card.name == name]
+        hand[:] = [card for card in hand if card.name != name]
+        deck[:] = [card for card in deck if card.name != name]
+
+        for card in mustered_from_hand + mustered_from_deck:
+            self.board.place_card(player, card)
+
+    @staticmethod
+    def _draw_cards(hand: list, deck: list, count: int) -> None:
+        """Draw up to ``count`` cards without drawing from an empty deck."""
+        for _ in range(min(count, len(deck))):
+            hand.append(deck.pop())
+
     def _move_board_to_discards(self) -> None:
-        """Move all units and board specials into their owners' public piles."""
+        """Move all units and board specials into their board owner's discard pile."""
         for player, board in ((1, self.board.player1), (2, self.board.player2)):
             discard = self._discard_for_player(player)
             for row in ROWS:
@@ -521,6 +537,7 @@ class GwentEnv:
         acting_player = self.current_player
         active_board = self.board.player1 if acting_player == 1 else self.board.player2
         active_hand = self.hand1 if acting_player == 1 else self.hand2
+        active_deck = self._deck_for_player(acting_player)
         active_discard = self._discard_for_player(acting_player)
         legal_actions = self.get_legal_actions()
         if action < 0 or action >= self.action_size or not legal_actions[action]:
@@ -542,7 +559,19 @@ class GwentEnv:
                 self.board.apply_weather(card.weather_row)
                 active_discard.append(card)
             else:
-                self.board.place_card(acting_player, card)
+                target_player = (
+                    2 if acting_player == 1 else 1
+                ) if card.effect == "spy" else acting_player
+                self.board.place_card(target_player, card)
+                if card.effect == "muster":
+                    self._play_muster_cards(
+                        acting_player,
+                        active_hand,
+                        active_deck,
+                        card.name,
+                    )
+                elif card.effect == "spy":
+                    self._draw_cards(active_hand, active_deck, count=2)
                 self.board.recompute_powers()
         elif action in HORN_ACTIONS.values():
             row = next(row for row, horn_action in HORN_ACTIONS.items() if horn_action == action)

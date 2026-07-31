@@ -106,6 +106,10 @@ class CardWidget(ctk.CTkFrame):
             power_text = f"TB · {card.current_power}"
         elif card.effect == "morale_boost":
             power_text = f"MB · {card.current_power}"
+        elif card.effect == "muster":
+            power_text = f"MU · {card.current_power}"
+        elif card.effect == "spy":
+            power_text = f"SP · {card.current_power}"
         elif card.effect == "decoy":
             power_text = "⇄"
         else:
