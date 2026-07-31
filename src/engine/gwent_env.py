@@ -11,6 +11,11 @@ from src.engine.card import (
 ROWS = ("melee", "ranged", "siege")
 HORN_CARD_TYPE = CARD_BY_NAME["Commander's Horn"]
 DECOY_CARD_TYPE = CARD_BY_NAME["Decoy"]
+MEDIC_CARD_TYPES = tuple(
+    type_id
+    for type_id, card in enumerate(CARD_CATALOG)
+    if card.get("effect") == "medic"
+)
 HORN_ACTION_START = NUM_CARD_TYPES
 HORN_ACTIONS = {
     row: HORN_ACTION_START + index
@@ -25,7 +30,26 @@ DECOY_ACTIONS = {
         if card.get("row") is not None and not card.get("hero", False)
     )
 }
-PASS_ACTION = DECOY_ACTION_START + len(DECOY_ACTIONS)
+MEDIC_TARGET_TYPE_IDS = tuple(
+    type_id
+    for type_id, card in enumerate(CARD_CATALOG)
+    if card.get("row") is not None and not card.get("hero", False)
+)
+MEDIC_ACTION_START = DECOY_ACTION_START + len(DECOY_ACTIONS)
+MEDIC_ACTIONS = {
+    (medic_type_id, target_type_id): MEDIC_ACTION_START + index
+    for index, (medic_type_id, target_type_id) in enumerate(
+        (medic_type_id, target_type_id)
+        for medic_type_id in MEDIC_CARD_TYPES
+        for target_type_id in MEDIC_TARGET_TYPE_IDS
+    )
+}
+MEDIC_NO_TARGET_ACTION_START = MEDIC_ACTION_START + len(MEDIC_ACTIONS)
+MEDIC_NO_TARGET_ACTIONS = {
+    medic_type_id: MEDIC_NO_TARGET_ACTION_START + index
+    for index, medic_type_id in enumerate(MEDIC_CARD_TYPES)
+}
+PASS_ACTION = MEDIC_NO_TARGET_ACTION_START + len(MEDIC_NO_TARGET_ACTIONS)
 # Per side: current hero power for each of melee/ranged/siege (3), times 2 sides.
 HERO_POWER_FEATURES = 2 * len(ROWS)
 # Per side: non-hero unit count and base power total per row (6), times 2 sides.
@@ -39,21 +63,26 @@ BOARD_FEATURES = (
     + BOARD_COMPOSITION_FEATURES
     + BOARD_CARD_COUNT_FEATURES
 )
-# [board features...] my_lives, opp_lives, opp_hand_len, my_passed, opp_passed, weather×3, horn×6
+# [board features...] my_lives, opp_lives, opp_hand_len, my_passed, opp_passed,
+# weather×3, horn×6, my_discard×N, opp_discard×N, active_hand×N
 MY_PASSED_STATE_INDEX = BOARD_FEATURES + 3
 MY_HORN_STATE_INDEX = BOARD_FEATURES + 5 + len(ROWS)
 GLOBAL_STATE_SIZE = MY_HORN_STATE_INDEX + 2 * len(ROWS)
+MY_DISCARD_STATE_INDEX = GLOBAL_STATE_SIZE
+OPP_DISCARD_STATE_INDEX = MY_DISCARD_STATE_INDEX + NUM_CARD_TYPES
+HAND_STATE_INDEX = OPP_DISCARD_STATE_INDEX + NUM_CARD_TYPES
 STARTING_LIVES = 2
 
-ROUND_WIN_REWARD = 0.5
+ROUND_WIN_REWARD = 0.0
 MATCH_WIN_REWARD = 1.0
-SCORE_DIFF_SCALE = 0.01
-ROUND_SEALED_PASS_SCALE = 0.06
-CARD_PLAY_COST_SCALE = 0.02
-CARD_PLAY_AHEAD_PENALTY_SCALE = 0.06
-ROUND_WIN_HAND_SAVE_SCALE = 0.06
-PASS_WITHOUT_LEAD_PENALTY = 0.15
-PASS_WHILE_LEADING_OPEN_PENALTY = 0.15
+TERMINAL_UNUSED_UNIT_POWER_PENALTY_SCALE = 0.0
+SCORE_DIFF_SCALE = 0.0
+ROUND_SEALED_PASS_SCALE = 0.0
+CARD_PLAY_COST_SCALE = 0.0
+CARD_PLAY_AHEAD_PENALTY_SCALE = 0.0
+ROUND_WIN_HAND_SAVE_SCALE = 0.0
+PASS_WITHOUT_LEAD_PENALTY = 0.0
+PASS_WHILE_LEADING_OPEN_PENALTY = 0.0
 WEATHER_RESERVE_VALUE = 4
 HORN_RESERVE_VALUE = 5
 DECOY_RESERVE_VALUE = 3
@@ -66,6 +95,8 @@ class GwentEnv:
         self.deck2 = []
         self.hand1 = []
         self.hand2 = []
+        self.discard1 = []
+        self.discard2 = []
 
         self.current_player = 1
         self.lives = [STARTING_LIVES, STARTING_LIVES]
@@ -75,7 +106,7 @@ class GwentEnv:
 
         self.pass_action = PASS_ACTION
         self.action_size = PASS_ACTION + 1
-        self.state_size = GLOBAL_STATE_SIZE + NUM_CARD_TYPES
+        self.state_size = HAND_STATE_INDEX + NUM_CARD_TYPES
 
     @staticmethod
     def _board_power_features(my_board, opp_board) -> list[int]:
@@ -105,11 +136,13 @@ class GwentEnv:
             my_lives, opp_lives = self.lives[0], self.lives[1]
             my_passed = self.board.player1.passed
             opp_passed = self.board.player2.passed
+            my_discard, opp_discard = self.discard1, self.discard2
         else:
             my_board, opp_board = self.board.player2, self.board.player1
             my_lives, opp_lives = self.lives[1], self.lives[0]
             my_passed = self.board.player2.passed
             opp_passed = self.board.player1.passed
+            my_discard, opp_discard = self.discard2, self.discard1
 
         weather_bits = [
             1 if self.board.weather_rows[row] else 0
@@ -128,6 +161,8 @@ class GwentEnv:
             1 if opp_passed else 0,
             *weather_bits,
             *horn_bits,
+            *hand_counts(my_discard),
+            *hand_counts(opp_discard),
         ] + hand_counts(active_hand)
 
         return np.array(state, dtype=np.float32)
@@ -146,17 +181,22 @@ class GwentEnv:
         mask = np.zeros(PASS_ACTION + 1, dtype=bool)
         if state[MY_PASSED_STATE_INDEX] >= 0.5:
             return mask
+        targeted_card_types = {
+            HORN_CARD_TYPE,
+            DECOY_CARD_TYPE,
+            *MEDIC_CARD_TYPES,
+        }
         for type_id in range(NUM_CARD_TYPES):
             if (
-                type_id not in (HORN_CARD_TYPE, DECOY_CARD_TYPE)
-                and state[GLOBAL_STATE_SIZE + type_id] > 0
+                type_id not in targeted_card_types
+                and state[HAND_STATE_INDEX + type_id] > 0
             ):
                 mask[type_id] = True
-        if state[GLOBAL_STATE_SIZE + HORN_CARD_TYPE] > 0:
+        if state[HAND_STATE_INDEX + HORN_CARD_TYPE] > 0:
             for index, row in enumerate(ROWS):
                 if state[MY_HORN_STATE_INDEX + index] < 0.5:
                     mask[HORN_ACTIONS[row]] = True
-        if state[GLOBAL_STATE_SIZE + DECOY_CARD_TYPE] > 0:
+        if state[HAND_STATE_INDEX + DECOY_CARD_TYPE] > 0:
             for type_id, action in DECOY_ACTIONS.items():
                 on_my_board = sum(
                     state[
@@ -168,6 +208,19 @@ class GwentEnv:
                 )
                 if on_my_board > 0:
                     mask[action] = True
+        has_medic_target = any(
+            state[MY_DISCARD_STATE_INDEX + target_type_id] > 0
+            for target_type_id in MEDIC_TARGET_TYPE_IDS
+        )
+        for medic_type_id in MEDIC_CARD_TYPES:
+            if state[HAND_STATE_INDEX + medic_type_id] <= 0:
+                continue
+            if has_medic_target:
+                for target_type_id in MEDIC_TARGET_TYPE_IDS:
+                    if state[MY_DISCARD_STATE_INDEX + target_type_id] > 0:
+                        mask[MEDIC_ACTIONS[medic_type_id, target_type_id]] = True
+            else:
+                mask[MEDIC_NO_TARGET_ACTIONS[medic_type_id]] = True
         mask[PASS_ACTION] = True
         return mask
 
@@ -178,6 +231,8 @@ class GwentEnv:
         self.last_round_was_tie = False
         self.match_draw = False
         self.current_player = 1
+        self.discard1 = []
+        self.discard2 = []
 
         self.deck1 = create_random_deck()
         self.deck2 = create_random_deck()
@@ -191,14 +246,20 @@ class GwentEnv:
         """Return a True/False list of legal actions for the current player."""
         active_hand = self.hand1 if self.current_player == 1 else self.hand2
         active_board = self.board.player1 if self.current_player == 1 else self.board.player2
+        active_discard = self.discard1 if self.current_player == 1 else self.discard2
 
         mask = np.zeros(self.action_size, dtype=bool)
 
         if active_board.passed:
             return mask
 
+        targeted_card_types = {
+            HORN_CARD_TYPE,
+            DECOY_CARD_TYPE,
+            *MEDIC_CARD_TYPES,
+        }
         for type_id, count in enumerate(hand_counts(active_hand)):
-            if type_id not in (HORN_CARD_TYPE, DECOY_CARD_TYPE) and count > 0:
+            if type_id not in targeted_card_types and count > 0:
                 mask[type_id] = True
             elif type_id == HORN_CARD_TYPE and count > 0:
                 for row, action in HORN_ACTIONS.items():
@@ -212,6 +273,17 @@ class GwentEnv:
                         for card in active_board.rows[row]
                     ):
                         mask[action] = True
+            elif type_id in MEDIC_CARD_TYPES and count > 0:
+                target_type_ids = {
+                    card.type_id
+                    for card in active_discard
+                    if card.type_id in MEDIC_TARGET_TYPE_IDS
+                }
+                if target_type_ids:
+                    for target_type_id in target_type_ids:
+                        mask[MEDIC_ACTIONS[type_id, target_type_id]] = True
+                else:
+                    mask[MEDIC_NO_TARGET_ACTIONS[type_id]] = True
 
         mask[self.pass_action] = True
 
@@ -222,6 +294,24 @@ class GwentEnv:
             if card.type_id == type_id:
                 return hand.pop(i)
         raise ValueError(f"No card of type {type_id} in hand")
+
+    def _remove_discard_by_type(self, discard: list, type_id: int):
+        for i, card in enumerate(discard):
+            if card.type_id == type_id:
+                return discard.pop(i)
+        raise ValueError(f"No card of type {type_id} in discard pile")
+
+    def _discard_for_player(self, player: int) -> list:
+        return self.discard1 if player == 1 else self.discard2
+
+    def _move_board_to_discards(self) -> None:
+        """Move all units and board specials into their owners' public piles."""
+        for player, board in ((1, self.board.player1), (2, self.board.player2)):
+            discard = self._discard_for_player(player)
+            for row in ROWS:
+                for card in board.rows[row]:
+                    card.reset()
+                    discard.append(card)
 
     def _score_diff_for_player(self, player: int) -> float:
         p1_score, p2_score = self.board.get_scores()
@@ -282,10 +372,8 @@ class GwentEnv:
         played_value: int,
         score_after: float,
     ) -> float:
-        """Discourage dumping cards while ahead only when saving them for another round matters."""
+        """Discourage spending cards after establishing a non-final-round lead."""
         if played_value == 0 or score_after <= 0:
-            return 0.0
-        if self._opponent_board(player).passed:
             return 0.0
         scale = self._hand_save_value_scale(player)
         if scale == 0.0:
@@ -332,14 +420,27 @@ class GwentEnv:
     def _match_is_over(self) -> bool:
         return self.match_draw or self.lives[0] == 0 or self.lives[1] == 0
 
+    def _unused_unit_power(self, player: int) -> int:
+        """Base power left in a player's hand when the match ends."""
+        hand = self.hand1 if player == 1 else self.hand2
+        return sum(card.base_power for card in hand if card.unit)
+
     def get_match_reward_for_player(self, player: int) -> float:
         """Terminal match reward from the given player's perspective."""
         if self.match_draw or (self.lives[0] == 0 and self.lives[1] == 0):
             return -MATCH_WIN_REWARD
-        if self.lives[0] == 0:
-            return self._perspective_from_p1(player, -MATCH_WIN_REWARD)
-        if self.lives[1] == 0:
-            return self._perspective_from_p1(player, MATCH_WIN_REWARD)
+        lost_match = (
+            (player == 1 and self.lives[0] == 0)
+            or (player == 2 and self.lives[1] == 0)
+        )
+        if lost_match:
+            unused_power_penalty = (
+                TERMINAL_UNUSED_UNIT_POWER_PENALTY_SCALE
+                * self._unused_unit_power(player)
+            )
+            return -MATCH_WIN_REWARD - unused_power_penalty
+        if self.lives[0] == 0 or self.lives[1] == 0:
+            return MATCH_WIN_REWARD
         return 0.0
 
     def _set_deferred_round_rewards(self, outcome: int) -> None:
@@ -355,11 +456,12 @@ class GwentEnv:
             self.deferred_round_rewards[player] = reward
 
     def step(self, action: int):
-        """Execute a card, targeted Horn or Decoy, or pass action."""
+        """Execute a card, targeted Horn, Decoy, or Medic, or pass action."""
 
         acting_player = self.current_player
         active_board = self.board.player1 if acting_player == 1 else self.board.player2
         active_hand = self.hand1 if acting_player == 1 else self.hand2
+        active_discard = self._discard_for_player(acting_player)
         legal_actions = self.get_legal_actions()
         if action < 0 or action >= self.action_size or not legal_actions[action]:
             raise ValueError(f"Illegal action: {action}")
@@ -374,6 +476,7 @@ class GwentEnv:
             played_value = self._card_reserve_value(card)
             if card.weather_row is not None:
                 self.board.apply_weather(card.weather_row)
+                active_discard.append(card)
             else:
                 self.board.place_card(acting_player, card)
                 self.board.recompute_powers()
@@ -382,6 +485,7 @@ class GwentEnv:
             card = self._remove_card_by_type(active_hand, HORN_CARD_TYPE)
             played_value = self._card_reserve_value(card)
             self.board.apply_horn(acting_player, row)
+            active_discard.append(card)
         elif action in DECOY_ACTIONS.values():
             target_type_id = next(
                 type_id
@@ -396,6 +500,28 @@ class GwentEnv:
                 card,
             )
             active_hand.append(returned_card)
+        elif action in MEDIC_ACTIONS.values():
+            medic_type_id, target_type_id = next(
+                action_key
+                for action_key, medic_action in MEDIC_ACTIONS.items()
+                if medic_action == action
+            )
+            medic = self._remove_card_by_type(active_hand, medic_type_id)
+            revived_card = self._remove_discard_by_type(active_discard, target_type_id)
+            played_value = self._card_reserve_value(medic)
+            self.board.place_card(acting_player, medic)
+            self.board.place_card(acting_player, revived_card)
+            self.board.recompute_powers()
+        elif action in MEDIC_NO_TARGET_ACTIONS.values():
+            medic_type_id = next(
+                type_id
+                for type_id, medic_action in MEDIC_NO_TARGET_ACTIONS.items()
+                if medic_action == action
+            )
+            medic = self._remove_card_by_type(active_hand, medic_type_id)
+            played_value = self._card_reserve_value(medic)
+            self.board.place_card(acting_player, medic)
+            self.board.recompute_powers()
         else:
             raise ValueError(f"Invalid action: {action}")
 
@@ -471,5 +597,6 @@ class GwentEnv:
                 self.lives[0] -= 1
                 self.lives[1] -= 1
 
+        self._move_board_to_discards()
         self.board.reset()
         return outcome

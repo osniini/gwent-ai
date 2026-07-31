@@ -396,8 +396,35 @@ class HandWidget(ctk.CTkFrame):
         self.slots.pack(side="left", fill="x", expand=True, padx=(0, 4), pady=3)
         self.slots.pack_propagate(False)
 
-        self.pass_btn = ctk.CTkButton(self, text="Pass", width=70, height=ROW_HEIGHT - 6)
-        self.pass_btn.pack(side="right", padx=(0, 4), pady=3)
+        self.controls = ctk.CTkFrame(
+            self,
+            fg_color="transparent",
+            width=70,
+            height=ROW_HEIGHT - 6,
+        )
+        self.controls.pack(side="right", padx=(0, 4), pady=3)
+        self.controls.pack_propagate(False)
+
+        self.pass_btn = ctk.CTkButton(
+            self.controls,
+            text="Pass",
+            width=70,
+            height=58,
+            fg_color="#101010",
+            hover_color="#202020",
+            text_color="#d8a137",
+        )
+        self.pass_btn.pack(fill="x", pady=(0, 2))
+        self.discard_btn = ctk.CTkButton(
+            self.controls,
+            text="Discard",
+            width=70,
+            height=30,
+            fg_color="#555555",
+            hover_color="#666666",
+            text_color="#ffffff",
+        )
+        self.discard_btn.pack(fill="x")
 
     def update(
         self,
@@ -405,6 +432,7 @@ class HandWidget(ctk.CTkFrame):
         on_click: Callable[[int], None] | None = None,
         legal=None,
         on_pass: Callable[[], None] | None = None,
+        on_view_discard: Callable[[], None] | None = None,
         playable_card_types: set[int] | None = None,
     ):
         for child in self.slots.winfo_children():
@@ -436,4 +464,8 @@ class HandWidget(ctk.CTkFrame):
         self.pass_btn.configure(
             command=on_pass if on_pass and can_pass else None,
             state="normal" if on_pass and can_pass else "disabled",
+        )
+        self.discard_btn.configure(
+            command=on_view_discard,
+            state="normal" if on_view_discard else "disabled",
         )

@@ -2,9 +2,10 @@ import random
 
 CARD_CATALOG = [
     {"name": "Geralt", "power": 15, "row": "melee", "hero": True, "unique": True},
-    {"name": "Yennefer", "power": 7, "row": "ranged", "hero": True, "unique": True},
+    {"name": "Yennefer", "power": 7, "row": "ranged", "hero": True, "effect": "medic", "unique": True},
     {"name": "Dandelion", "power": 2, "row": "melee", "unique": True},
     {"name": "Trebuchet", "power": 6, "row": "siege"},
+    {"name": "Dun Banner Medic", "power": 3, "row": "siege", "effect": "medic"},
     {"name": "Redanian Knight", "power": 4, "row": "melee"},
     {"name": "Archer", "power": 5, "row": "ranged"},
     {"name": "Catapult", "power": 8, "row": "siege", "effect": "tight_bond"},
