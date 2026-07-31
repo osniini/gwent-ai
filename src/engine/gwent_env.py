@@ -1,10 +1,11 @@
 import numpy as np
+import random
 from src.engine.board import GameBoard
 from src.engine.card import (
     CARD_BY_NAME,
     CARD_CATALOG,
     NUM_CARD_TYPES,
-    create_random_deck,
+    create_deck,
     hand_counts,
 )
 
@@ -50,6 +51,7 @@ MEDIC_NO_TARGET_ACTIONS = {
     for index, medic_type_id in enumerate(MEDIC_CARD_TYPES)
 }
 PASS_ACTION = MEDIC_NO_TARGET_ACTION_START + len(MEDIC_NO_TARGET_ACTIONS)
+REDRAW_DONE_ACTION = PASS_ACTION + 1
 # Per side: current hero power for each of melee/ranged/siege (3), times 2 sides.
 HERO_POWER_FEATURES = 2 * len(ROWS)
 # Per side: non-hero unit count and base power total per row (6), times 2 sides.
@@ -64,14 +66,18 @@ BOARD_FEATURES = (
     + BOARD_CARD_COUNT_FEATURES
 )
 # [board features...] my_lives, opp_lives, opp_hand_len, my_passed, opp_passed,
-# weather×3, horn×6, my_discard×N, opp_discard×N, active_hand×N
+# weather×3, horn×6, my_discard×N, opp_discard×N, active_hand×N,
+# redraw active, redraws remaining
 MY_PASSED_STATE_INDEX = BOARD_FEATURES + 3
 MY_HORN_STATE_INDEX = BOARD_FEATURES + 5 + len(ROWS)
 GLOBAL_STATE_SIZE = MY_HORN_STATE_INDEX + 2 * len(ROWS)
 MY_DISCARD_STATE_INDEX = GLOBAL_STATE_SIZE
 OPP_DISCARD_STATE_INDEX = MY_DISCARD_STATE_INDEX + NUM_CARD_TYPES
 HAND_STATE_INDEX = OPP_DISCARD_STATE_INDEX + NUM_CARD_TYPES
+REDRAW_ACTIVE_STATE_INDEX = HAND_STATE_INDEX + NUM_CARD_TYPES
+REDRAWS_REMAINING_STATE_INDEX = REDRAW_ACTIVE_STATE_INDEX + 1
 STARTING_LIVES = 2
+MAX_REDRAWS = 2
 
 ROUND_WIN_REWARD = 0.0
 MATCH_WIN_REWARD = 1.0
@@ -100,13 +106,17 @@ class GwentEnv:
 
         self.current_player = 1
         self.lives = [STARTING_LIVES, STARTING_LIVES]
+        self.redraw_active = False
+        self.redraws_remaining = {1: 0, 2: 0}
+        self.redraw_returns = {1: [], 2: []}
         self.deferred_round_rewards: dict[int, float] = {}
         self.last_round_was_tie = False
         self.match_draw = False
 
         self.pass_action = PASS_ACTION
-        self.action_size = PASS_ACTION + 1
-        self.state_size = HAND_STATE_INDEX + NUM_CARD_TYPES
+        self.redraw_done_action = REDRAW_DONE_ACTION
+        self.action_size = REDRAW_DONE_ACTION + 1
+        self.state_size = REDRAWS_REMAINING_STATE_INDEX + 1
 
     @staticmethod
     def _board_power_features(my_board, opp_board) -> list[int]:
@@ -163,7 +173,10 @@ class GwentEnv:
             *horn_bits,
             *hand_counts(my_discard),
             *hand_counts(opp_discard),
-        ] + hand_counts(active_hand)
+            *hand_counts(active_hand),
+            1 if self.redraw_active else 0,
+            self.redraws_remaining[self.current_player],
+        ]
 
         return np.array(state, dtype=np.float32)
 
@@ -178,7 +191,14 @@ class GwentEnv:
     @staticmethod
     def legal_mask_from_state(state: np.ndarray) -> np.ndarray:
         """Rebuild legal actions from a learner-perspective state vector."""
-        mask = np.zeros(PASS_ACTION + 1, dtype=bool)
+        mask = np.zeros(REDRAW_DONE_ACTION + 1, dtype=bool)
+        if state[REDRAW_ACTIVE_STATE_INDEX] >= 0.5:
+            if state[REDRAWS_REMAINING_STATE_INDEX] > 0:
+                for type_id in range(NUM_CARD_TYPES):
+                    if state[HAND_STATE_INDEX + type_id] > 0:
+                        mask[type_id] = True
+            mask[REDRAW_DONE_ACTION] = True
+            return mask
         if state[MY_PASSED_STATE_INDEX] >= 0.5:
             return mask
         targeted_card_types = {
@@ -233,9 +253,12 @@ class GwentEnv:
         self.current_player = 1
         self.discard1 = []
         self.discard2 = []
+        self.redraw_active = True
+        self.redraws_remaining = {1: MAX_REDRAWS, 2: MAX_REDRAWS}
+        self.redraw_returns = {1: [], 2: []}
 
-        self.deck1 = create_random_deck()
-        self.deck2 = create_random_deck()
+        self.deck1 = create_deck()
+        self.deck2 = create_deck()
 
         self.hand1 = [self.deck1.pop() for _ in range(min(8, len(self.deck1)))]
         self.hand2 = [self.deck2.pop() for _ in range(min(8, len(self.deck2)))]
@@ -249,6 +272,14 @@ class GwentEnv:
         active_discard = self.discard1 if self.current_player == 1 else self.discard2
 
         mask = np.zeros(self.action_size, dtype=bool)
+
+        if self.redraw_active:
+            if self.redraws_remaining[self.current_player] > 0:
+                for type_id, count in enumerate(hand_counts(active_hand)):
+                    if count > 0:
+                        mask[type_id] = True
+            mask[self.redraw_done_action] = True
+            return mask
 
         if active_board.passed:
             return mask
@@ -303,6 +334,35 @@ class GwentEnv:
 
     def _discard_for_player(self, player: int) -> list:
         return self.discard1 if player == 1 else self.discard2
+
+    def _deck_for_player(self, player: int) -> list:
+        return self.deck1 if player == 1 else self.deck2
+
+    def _finish_redraw(self, player: int) -> None:
+        """Return redrawn cards to the player's deck after their redraw phase."""
+        deck = self._deck_for_player(player)
+        deck.extend(self.redraw_returns[player])
+        random.shuffle(deck)
+        self.redraw_returns[player] = []
+
+    def _step_redraw(self, action: int) -> None:
+        player = self.current_player
+        hand = self.hand1 if player == 1 else self.hand2
+        deck = self._deck_for_player(player)
+
+        if action == self.redraw_done_action:
+            self._finish_redraw(player)
+            if player == 1:
+                self.current_player = 2
+            else:
+                self.redraw_active = False
+                self.current_player = 1
+            return
+
+        redrawn_card = self._remove_card_by_type(hand, action)
+        hand.append(deck.pop())
+        self.redraw_returns[player].append(redrawn_card)
+        self.redraws_remaining[player] -= 1
 
     def _move_board_to_discards(self) -> None:
         """Move all units and board specials into their owners' public piles."""
@@ -456,7 +516,7 @@ class GwentEnv:
             self.deferred_round_rewards[player] = reward
 
     def step(self, action: int):
-        """Execute a card, targeted Horn, Decoy, or Medic, or pass action."""
+        """Execute a redraw, card, targeted effect, or pass action."""
 
         acting_player = self.current_player
         active_board = self.board.player1 if acting_player == 1 else self.board.player2
@@ -465,6 +525,10 @@ class GwentEnv:
         legal_actions = self.get_legal_actions()
         if action < 0 or action >= self.action_size or not legal_actions[action]:
             raise ValueError(f"Illegal action: {action}")
+
+        if self.redraw_active:
+            self._step_redraw(action)
+            return self._get_state(), 0.0, False
 
         score_before = self._score_diff_for_player(acting_player)
         played_value = 0

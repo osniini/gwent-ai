@@ -434,6 +434,8 @@ class HandWidget(ctk.CTkFrame):
         on_pass: Callable[[], None] | None = None,
         on_view_discard: Callable[[], None] | None = None,
         playable_card_types: set[int] | None = None,
+        pass_action: int | None = None,
+        pass_text: str = "Pass",
     ):
         for child in self.slots.winfo_children():
             child.destroy()
@@ -457,11 +459,13 @@ class HandWidget(ctk.CTkFrame):
             )
 
         can_pass = (
-            bool(legal[-1])
+            bool(legal[pass_action]) if pass_action is not None
+            else bool(legal[-1])
             if legal is not None and len(legal) > 0
             else True
         )
         self.pass_btn.configure(
+            text=pass_text,
             command=on_pass if on_pass and can_pass else None,
             state="normal" if on_pass and can_pass else "disabled",
         )

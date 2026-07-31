@@ -12,6 +12,7 @@ from src.engine.gwent_env import (
     MEDIC_CARD_TYPES,
     MEDIC_NO_TARGET_ACTIONS,
     PASS_ACTION,
+    REDRAW_DONE_ACTION,
 )
 from src.gui.widgets import (
     BoardWidget,
@@ -83,6 +84,7 @@ class GwentApp(ctk.CTk):
             and not self.round_paused
         )
         legal = self.env.get_legal_actions() if can_act else np.zeros(self.env.action_size, dtype=bool)
+        redrawing = self.env.redraw_active and can_act
         selecting_horn = self.pending_horn and can_act
         selecting_decoy = self.pending_decoy and can_act
         selecting_medic = self.pending_medic_type is not None and can_act
@@ -137,7 +139,9 @@ class GwentApp(ctk.CTk):
         )
         self.horn_instruction.configure(
             text=(
-                "Select a highlighted row for Commander's Horn (Esc to cancel)."
+                f"Redraw up to {self.env.redraws_remaining[1]} card(s), then press Done."
+                if redrawing
+                else "Select a highlighted row for Commander's Horn (Esc to cancel)."
                 if selecting_horn
                 else "Select one of your units to replace with Decoy (Esc to cancel)."
                 if selecting_decoy
@@ -166,6 +170,8 @@ class GwentApp(ctk.CTk):
             ),
             on_view_discard=self.show_discard_piles,
             playable_card_types=selectable_discard_types if selecting_medic else playable_card_types,
+            pass_action=REDRAW_DONE_ACTION if redrawing else PASS_ACTION,
+            pass_text="Done" if redrawing else "Pass",
         )
         self.player_hand.label.configure(text="Discard" if selecting_medic else "Hand")
 
@@ -210,6 +216,8 @@ class GwentApp(ctk.CTk):
             return CARD_CATALOG[action]["name"]
         if action == PASS_ACTION:
             return "Pass"
+        if action == REDRAW_DONE_ACTION:
+            return "Done redrawing"
         for row, horn_action in HORN_ACTIONS.items():
             if action == horn_action:
                 return f"Commander's Horn ({row})"
@@ -366,6 +374,10 @@ class GwentApp(ctk.CTk):
             return
 
         legal = self.env.get_legal_actions()
+        if self.env.redraw_active:
+            if type_id < len(legal) and legal[type_id]:
+                self._apply_action(type_id)
+            return
         if type_id == HORN_CARD_TYPE:
             if any(legal[action] for action in HORN_ACTIONS.values()):
                 self.pending_horn = True
@@ -433,7 +445,8 @@ class GwentApp(ctk.CTk):
     def on_pass(self):
         if self.pending_horn or self.pending_decoy or self.pending_medic_type is not None:
             return
-        self._apply_action(self.env.pass_action)
+        action = self.env.redraw_done_action if self.env.redraw_active else self.env.pass_action
+        self._apply_action(action)
 
     def show_discard_piles(self):
         if self._discard_window is None or not self._discard_window.winfo_exists():
