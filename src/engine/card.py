@@ -17,7 +17,7 @@ CARD_CATALOG = [  # Defines the deck: each entry contributes `count` copies.
     {"name": "Triss", "power": 7, "row": "melee", "hero": True, "count": 1},
     {"name": "Philippa Eilhart", "power": 10, "row": "ranged", "hero": True, "count": 1},
     {"name": "Thaler", "power": 1, "row": "siege", "effect": "spy", "count": 1},
-    {"name": "Mysterious Elf", "power": 0, "row": "melee", "effect": "spy", "count": 8},
+    {"name": "Mysterious Elf", "power": 0, "row": "melee", "hero": True, "effect": "spy", "count": 1},
     {"name": "Sigismund Dijkstra", "power": 4, "row": "melee", "effect": "spy", "count": 1},
     {"name": "Roach", "power": 3, "row": "melee", "count": 1},
     {"name": "Dethmold", "power": 6, "row": "ranged", "count": 1},
@@ -30,6 +30,7 @@ CARD_CATALOG = [  # Defines the deck: each entry contributes `count` copies.
     {"name": "Clear Weather", "weather_row": "clear", "count": 2},
     {"name": "Commander's Horn", "effect": "horn", "count": 3},
     {"name": "Decoy", "effect": "decoy", "count": 3},
+    {"name": "Scorch", "effect": "scorch", "count": 3},
 ]
 
 CARD_BY_NAME = {entry["name"]: i for i, entry in enumerate(CARD_CATALOG)}

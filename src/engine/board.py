@@ -112,6 +112,31 @@ class GameBoard:
             raise ValueError(f"Unknown weather_row: {weather_row}")
         self.recompute_powers()
 
+    def scorch(self) -> list[tuple[int, Card]]:
+        """Destroy every non-hero card tied for highest current power."""
+        cards_on_board = [
+            card
+            for board in (self.player1, self.player2)
+            for cards in board.rows.values()
+            for card in cards
+            if not card.hero
+        ]
+        if not cards_on_board:
+            return []
+
+        highest_power = max(card.current_power for card in cards_on_board)
+        destroyed = []
+        for player, board in ((1, self.player1), (2, self.player2)):
+            for row, cards in board.rows.items():
+                survivors = []
+                for card in cards:
+                    if not card.hero and card.current_power == highest_power:
+                        destroyed.append((player, card))
+                    else:
+                        survivors.append(card)
+                board.rows[row] = survivors
+        return destroyed
+
     def recompute_powers(self):
         """Reset units, then apply weather, Tight Bond, Horn, and Morale Boost."""
         for board in (self.player1, self.player2):

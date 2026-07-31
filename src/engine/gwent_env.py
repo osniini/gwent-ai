@@ -555,7 +555,13 @@ class GwentEnv:
         elif 0 <= action < NUM_CARD_TYPES:
             card = self._remove_card_by_type(active_hand, action)
             played_value = self._card_reserve_value(card)
-            if card.weather_row is not None:
+            if card.effect == "scorch":
+                active_discard.append(card)
+                for board_player, destroyed_card in self.board.scorch():
+                    destroyed_card.reset()
+                    self._discard_for_player(board_player).append(destroyed_card)
+                self.board.recompute_powers()
+            elif card.weather_row is not None:
                 self.board.apply_weather(card.weather_row)
                 active_discard.append(card)
             else:
