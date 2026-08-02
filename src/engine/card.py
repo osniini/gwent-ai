@@ -1,34 +1,41 @@
 import random
 
-CARD_CATALOG = [
-    {"name": "Geralt", "power": 15, "row": "melee", "hero": True, "unique": True},
-    {"name": "Yennefer", "power": 7, "row": "ranged", "hero": True, "unique": True},
-    {"name": "Dandelion", "power": 2, "row": "melee", "unique": True},
-    {"name": "Trebuchet", "power": 6, "row": "siege"},
-    {"name": "Redanian Knight", "power": 4, "row": "melee"},
-    {"name": "Archer", "power": 5, "row": "ranged"},
-    {"name": "Catapult", "power": 8, "row": "siege"},
-    {"name": "Ciri", "power": 15, "row": "melee", "hero": True, "unique": True},
-    {"name": "Poor Fucking Infantry", "power": 1, "row": "melee"},
-    {"name": "Vesemir", "power": 6, "row": "melee", "unique": True},
-    {"name": "Triss", "power": 7, "row": "melee", "hero": True, "unique": True},
-    {"name": "Philippa Eilhart", "power": 10, "row": "ranged", "hero": True, "unique": True},
-    {"name": "Thaler", "power": 1, "row": "siege", "unique": True},
-    {"name": "Roach", "power": 3, "row": "melee", "unique": True},
-    {"name": "Dethmold", "power": 6, "row": "ranged", "unique": True},
-    {"name": "Sheldon Skaggs", "power": 4, "row": "ranged", "unique": True},
-    {"name": "Keira Metz", "power": 5, "row": "ranged", "unique": True},
-    {"name": "Biting Frost", "weather_row": "melee"},
-    {"name": "Impenetrable Fog", "weather_row": "ranged"},
-    {"name": "Torrential Rain", "weather_row": "siege"},
-    {"name": "Clear Weather", "weather_row": "clear"},
-    {"name": "Commander's Horn", "effect": "horn"},
+CARD_CATALOG = [  # Defines the deck: each entry contributes `count` copies.
+    {"name": "Geralt", "power": 15, "row": "melee", "hero": True, "count": 1},
+    {"name": "Yennefer", "power": 7, "row": "ranged", "hero": True, "effect": "medic", "count": 1},
+    {"name": "Dandelion", "power": 2, "row": "melee", "count": 1},
+    {"name": "Trebuchet", "power": 6, "row": "siege", "count": 1},
+    {"name": "Dun Banner Medic", "power": 3, "row": "siege", "effect": "medic", "count": 2},
+    {"name": "Redanian Knight", "power": 4, "row": "melee", "count": 3},
+    {"name": "Archer", "power": 5, "row": "ranged", "count": 3},
+    {"name": "Catapult", "power": 8, "row": "siege", "effect": "tight_bond", "count": 3},
+    {"name": "Blue Stripes Commando", "power": 4, "row": "melee", "effect": "tight_bond", "count": 3},
+    {"name": "Ciri", "power": 15, "row": "melee", "hero": True, "count": 1},
+    {"name": "Poor Fucking Infantry", "power": 1, "row": "melee", "effect": "tight_bond", "count": 2},
+    {"name": "Vesemir", "power": 6, "row": "melee", "count": 1},
+    {"name": "Kaedweni Siege Expert", "power": 1, "row": "siege", "effect": "morale_boost", "count": 3},
+    {"name": "Triss", "power": 7, "row": "melee", "hero": True, "count": 1},
+    {"name": "Philippa Eilhart", "power": 10, "row": "ranged", "hero": True, "count": 1},
+    {"name": "Thaler", "power": 1, "row": "siege", "effect": "spy", "count": 1},
+    {"name": "Mysterious Elf", "power": 0, "row": "melee", "hero": True, "effect": "spy", "count": 1},
+    {"name": "Sigismund Dijkstra", "power": 4, "row": "melee", "effect": "spy", "count": 1},
+    {"name": "Roach", "power": 3, "row": "melee", "count": 1},
+    {"name": "Dethmold", "power": 6, "row": "ranged", "count": 1},
+    {"name": "Sheldon Skaggs", "power": 4, "row": "ranged", "count": 1},
+    {"name": "Gaunter O'Dimm: Darkness", "power": 4, "row": "ranged", "effect": "muster", "count": 3},
+    {"name": "Keira Metz", "power": 5, "row": "ranged", "count": 1},
+    {"name": "Biting Frost", "weather_row": "melee", "count": 2},
+    {"name": "Impenetrable Fog", "weather_row": "ranged", "count": 2},
+    {"name": "Torrential Rain", "weather_row": "siege", "count": 2},
+    {"name": "Clear Weather", "weather_row": "clear", "count": 2},
+    {"name": "Commander's Horn", "effect": "horn", "count": 3},
+    {"name": "Decoy", "effect": "decoy", "count": 3},
+    {"name": "Scorch", "effect": "scorch", "count": 3},
 ]
 
 CARD_BY_NAME = {entry["name"]: i for i, entry in enumerate(CARD_CATALOG)}
 NUM_CARD_TYPES = len(CARD_CATALOG)
 PASS_ACTION = NUM_CARD_TYPES
-DECK_SIZE = 10
 
 
 class Card:
@@ -44,8 +51,8 @@ class Card:
         self.current_power = self.base_power
         self.weather_row = stats.get("weather_row")
         self.hero = stats.get("hero", False)
-        self.unique = stats.get("unique", False)
         self.effect = stats.get("effect")
+        self.unit = stats.get("unit", self.row is not None)
 
     def reset(self):
         """Reset card power to its base value."""
@@ -67,13 +74,13 @@ def hand_counts(hand: list[Card]) -> list[int]:
     return counts
 
 
-def create_random_deck():
-    """Build a deck; unique cards appear at most once, others may duplicate."""
-    available = list(range(NUM_CARD_TYPES))
-    type_ids = []
-    for _ in range(DECK_SIZE):
-        type_id = random.choice(available)
-        type_ids.append(type_id)
-        if CARD_CATALOG[type_id].get("unique", False):
-            available.remove(type_id)
-    return [Card(type_id) for type_id in type_ids]
+def create_deck() -> list[Card]:
+    """Build and shuffle the complete deck declared by ``CARD_CATALOG``."""
+    deck = []
+    for type_id, card in enumerate(CARD_CATALOG):
+        count = card.get("count", 1)
+        if not isinstance(count, int) or count < 0:
+            raise ValueError(f"Invalid count for {card['name']}: {count!r}")
+        deck.extend(Card(type_id) for _ in range(count))
+    random.shuffle(deck)
+    return deck

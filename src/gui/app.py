@@ -1,11 +1,23 @@
 import numpy as np
 import customtkinter as ctk
 from src.ai.agent import DQNAgent
-from src.engine.card import NUM_CARD_TYPES
-from src.engine.gwent_env import GwentEnv, HORN_ACTIONS, HORN_CARD_TYPE
+from src.engine.card import CARD_CATALOG, NUM_CARD_TYPES
+from src.engine.gwent_env import (
+    DECOY_ACTIONS,
+    DECOY_CARD_TYPE,
+    GwentEnv,
+    HORN_ACTIONS,
+    HORN_CARD_TYPE,
+    MEDIC_ACTIONS,
+    MEDIC_CARD_TYPES,
+    MEDIC_NO_TARGET_ACTIONS,
+    PASS_ACTION,
+    REDRAW_DONE_ACTION,
+)
 from src.gui.widgets import (
     BoardWidget,
     BOTTOM_ROW_ORDER,
+    CardWidget,
     HandWidget,
     PlayerWidget,
     TOP_ROW_ORDER,
@@ -23,8 +35,11 @@ class GwentApp(ctk.CTk):
         self.game_over = False
         self.round_paused = False
         self.pending_horn = False
+        self.pending_decoy = False
+        self.pending_medic_type: int | None = None
         self._ai_job = None
         self._round_continue_job = None
+        self._discard_window = None
 
         self.agent = DQNAgent(self.env.state_size, self.env.action_size)
         try:
@@ -69,10 +84,26 @@ class GwentApp(ctk.CTk):
             and not self.round_paused
         )
         legal = self.env.get_legal_actions() if can_act else np.zeros(self.env.action_size, dtype=bool)
+        redrawing = self.env.redraw_active and can_act
         selecting_horn = self.pending_horn and can_act
+        selecting_decoy = self.pending_decoy and can_act
+        selecting_medic = self.pending_medic_type is not None and can_act
         selectable_rows = {
             row for row, action in HORN_ACTIONS.items()
             if selecting_horn and legal[action]
+        }
+        selectable_card_types = {
+            type_id for type_id, action in DECOY_ACTIONS.items()
+            if selecting_decoy and legal[action]
+        }
+        selectable_discard_types = {
+            target_type_id
+            for (medic_type_id, target_type_id), action in MEDIC_ACTIONS.items()
+            if (
+                selecting_medic
+                and medic_type_id == self.pending_medic_type
+                and legal[action]
+            )
         }
         playable_card_types = {
             type_id for type_id in range(NUM_CARD_TYPES)
@@ -80,7 +111,20 @@ class GwentApp(ctk.CTk):
         }
         if any(legal[action] for action in HORN_ACTIONS.values()):
             playable_card_types.add(HORN_CARD_TYPE)
-        if selecting_horn:
+        if any(legal[action] for action in DECOY_ACTIONS.values()):
+            playable_card_types.add(DECOY_CARD_TYPE)
+        for medic_type_id in MEDIC_CARD_TYPES:
+            medic_actions = (
+                action
+                for (source_type_id, _), action in MEDIC_ACTIONS.items()
+                if source_type_id == medic_type_id
+            )
+            if (
+                any(legal[action] for action in medic_actions)
+                or legal[MEDIC_NO_TARGET_ACTIONS[medic_type_id]]
+            ):
+                playable_card_types.add(medic_type_id)
+        if selecting_horn or selecting_decoy or selecting_medic:
             playable_card_types = set()
 
         weather = self.env.board.weather_rows
@@ -90,20 +134,46 @@ class GwentApp(ctk.CTk):
             weather,
             selectable_rows=selectable_rows,
             on_row_click=self.on_select_horn_row if selecting_horn else None,
+            selectable_card_types=selectable_card_types,
+            on_card_click=self.on_select_decoy_target if selecting_decoy else None,
         )
         self.horn_instruction.configure(
-            text="Select a highlighted row for Commander's Horn (Esc to cancel)."
-            if selecting_horn
-            else ""
+            text=(
+                f"Redraw up to 2 cards, then press Done."
+                if redrawing
+                else "Select a highlighted row for Commander's Horn (Esc to cancel)."
+                if selecting_horn
+                else "Select one of your units to replace with Decoy (Esc to cancel)."
+                if selecting_decoy
+                else "Select a unit from your discard pile to revive (Esc to cancel)."
+                if selecting_medic
+                else ""
+            )
         )
 
+        self._refresh_discard_window()
+        displayed_cards = self.env.discard1 if selecting_medic else self.env.hand1
         self.player_hand.update(
-            self.env.hand1,
-            on_click=self.on_play_card if can_act and not selecting_horn else None,
+            displayed_cards,
+            on_click=(
+                self.on_select_medic_target
+                if selecting_medic
+                else self.on_play_card
+                if can_act and not selecting_horn and not selecting_decoy
+                else None
+            ),
             legal=legal,
-            on_pass=self.on_pass if can_act and not selecting_horn else None,
-            playable_card_types=playable_card_types,
+            on_pass=(
+                self.on_pass
+                if can_act and not selecting_horn and not selecting_decoy and not selecting_medic
+                else None
+            ),
+            on_view_discard=self.show_discard_piles,
+            playable_card_types=selectable_discard_types if selecting_medic else playable_card_types,
+            pass_action=REDRAW_DONE_ACTION if redrawing else PASS_ACTION,
+            pass_text="Done" if redrawing else "Pass",
         )
+        self.player_hand.label.configure(text="Discard" if selecting_medic else "Hand")
 
         if self.env.current_player == 2 and not self.game_over and not self.round_paused:
             self._schedule_ai_turn()
@@ -124,10 +194,46 @@ class GwentApp(ctk.CTk):
             return
 
         state = self.env._get_state()
+        q_values = self.agent.get_q_values(state)
         action = self.agent.select_action(state, legal)
+        legal_actions = np.flatnonzero(legal)
+        q_value_summary = " | ".join(
+            f"{self._action_label(legal_action)}={q_values[legal_action]:.3f}"
+            for legal_action in legal_actions
+        )
+        print(f"AI legal Q-values: {q_value_summary}")
+        print(
+            f"AI selected: {self._action_label(action)} "
+            f"(Q={q_values[action]:.3f})"
+        )
         if action == self.env.pass_action and self.env.lives[1] <= 1:
             print(f"AI passed on final life with hand: {self.env.hand2}") # DEBUG print for final life pass
         self._apply_action(action)
+
+    @staticmethod
+    def _action_label(action: int) -> str:
+        if action < NUM_CARD_TYPES:
+            return CARD_CATALOG[action]["name"]
+        if action == PASS_ACTION:
+            return "Pass"
+        if action == REDRAW_DONE_ACTION:
+            return "Done redrawing"
+        for row, horn_action in HORN_ACTIONS.items():
+            if action == horn_action:
+                return f"Commander's Horn ({row})"
+        for type_id, decoy_action in DECOY_ACTIONS.items():
+            if action == decoy_action:
+                return f"Decoy → {CARD_CATALOG[type_id]['name']}"
+        for (medic_type_id, target_type_id), medic_action in MEDIC_ACTIONS.items():
+            if action == medic_action:
+                return (
+                    f"{CARD_CATALOG[medic_type_id]['name']} → "
+                    f"{CARD_CATALOG[target_type_id]['name']}"
+                )
+        for medic_type_id, medic_action in MEDIC_NO_TARGET_ACTIONS.items():
+            if action == medic_action:
+                return f"{CARD_CATALOG[medic_type_id]['name']} (no revive)"
+        return f"Action {action}"
 
     def _apply_action(self, action: int):
         prev_lives = list(self.env.lives)
@@ -205,6 +311,8 @@ class GwentApp(ctk.CTk):
         self.game_over = False
         self.round_paused = False
         self.pending_horn = False
+        self.pending_decoy = False
+        self.pending_medic_type = None
         self._hide_overlay()
         self.refresh()
 
@@ -259,15 +367,38 @@ class GwentApp(ctk.CTk):
             self.game_over
             or self.round_paused
             or self.pending_horn
+            or self.pending_decoy
+            or self.pending_medic_type is not None
             or self.env.current_player != 1
         ):
             return
 
         legal = self.env.get_legal_actions()
+        if self.env.redraw_active:
+            if type_id < len(legal) and legal[type_id]:
+                self._apply_action(type_id)
+            return
         if type_id == HORN_CARD_TYPE:
             if any(legal[action] for action in HORN_ACTIONS.values()):
                 self.pending_horn = True
                 self.refresh()
+            return
+        if type_id == DECOY_CARD_TYPE:
+            if any(legal[action] for action in DECOY_ACTIONS.values()):
+                self.pending_decoy = True
+                self.refresh()
+            return
+        if type_id in MEDIC_CARD_TYPES:
+            target_actions = (
+                action
+                for (medic_type_id, _), action in MEDIC_ACTIONS.items()
+                if medic_type_id == type_id
+            )
+            if any(legal[action] for action in target_actions):
+                self.pending_medic_type = type_id
+                self.refresh()
+            elif legal[MEDIC_NO_TARGET_ACTIONS[type_id]]:
+                self._apply_action(MEDIC_NO_TARGET_ACTIONS[type_id])
             return
         if type_id >= len(legal) or not legal[type_id]:
             return
@@ -284,15 +415,88 @@ class GwentApp(ctk.CTk):
         self.pending_horn = False
         self._apply_action(action)
 
+    def on_select_decoy_target(self, type_id: int):
+        if not self.pending_decoy:
+            return
+        action = DECOY_ACTIONS.get(type_id)
+        legal = self.env.get_legal_actions()
+        if action is None or not legal[action]:
+            return
+        self.pending_decoy = False
+        self._apply_action(action)
+
+    def on_select_medic_target(self, type_id: int):
+        if self.pending_medic_type is None:
+            return
+        action = MEDIC_ACTIONS.get((self.pending_medic_type, type_id))
+        legal = self.env.get_legal_actions()
+        if action is None or not legal[action]:
+            return
+        self.pending_medic_type = None
+        self._apply_action(action)
+
     def _cancel_horn_selection(self, _event=None):
-        if self.pending_horn:
+        if self.pending_horn or self.pending_decoy or self.pending_medic_type is not None:
             self.pending_horn = False
+            self.pending_decoy = False
+            self.pending_medic_type = None
             self.refresh()
 
     def on_pass(self):
-        if self.pending_horn:
+        if self.pending_horn or self.pending_decoy or self.pending_medic_type is not None:
             return
-        self._apply_action(self.env.pass_action)
+        action = self.env.redraw_done_action if self.env.redraw_active else self.env.pass_action
+        self._apply_action(action)
+
+    def show_discard_piles(self):
+        if self._discard_window is None or not self._discard_window.winfo_exists():
+            self._discard_window = ctk.CTkToplevel(self)
+            self._discard_window.title("Discard piles")
+            self._discard_window.geometry("780x390")
+            self._discard_window.resizable(False, False)
+            self._discard_window.protocol(
+                "WM_DELETE_WINDOW",
+                lambda: self._discard_window.destroy(),
+            )
+        self._discard_window.deiconify()
+        self._discard_window.lift()
+        self._refresh_discard_window()
+
+    def _refresh_discard_window(self):
+        if self._discard_window is None or not self._discard_window.winfo_exists():
+            return
+        for child in self._discard_window.winfo_children():
+            child.destroy()
+
+        for column, (title, cards) in enumerate((
+            ("Your discard", self.env.discard1),
+            ("Opponent discard", self.env.discard2),
+        )):
+            pile = ctk.CTkFrame(self._discard_window, fg_color="transparent")
+            pile.grid(row=0, column=column, sticky="nsew", padx=12, pady=12)
+            ctk.CTkLabel(
+                pile,
+                text=f"{title} ({len(cards)})",
+                font=ctk.CTkFont(size=14, weight="bold"),
+            ).pack(pady=(0, 8))
+            cards_frame = ctk.CTkFrame(pile, fg_color="#1a1a1a", corner_radius=4)
+            cards_frame.pack(fill="both", expand=True)
+            if not cards:
+                ctk.CTkLabel(cards_frame, text="Empty", text_color="#888888").pack(
+                    padx=120,
+                    pady=120,
+                )
+                continue
+            for index, card in enumerate(cards):
+                CardWidget(cards_frame, card).grid(
+                    row=index // 4,
+                    column=index % 4,
+                    padx=4,
+                    pady=4,
+                )
+
+        self._discard_window.grid_columnconfigure((0, 1), weight=1)
+        self._discard_window.grid_rowconfigure(0, weight=1)
 
 
 if __name__ == "__main__":
