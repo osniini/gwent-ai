@@ -139,7 +139,7 @@ class GwentApp(ctk.CTk):
         )
         self.horn_instruction.configure(
             text=(
-                f"Redraw up to {self.env.redraws_remaining[1]} card(s), then press Done."
+                f"Redraw up to 2 cards, then press Done."
                 if redrawing
                 else "Select a highlighted row for Commander's Horn (Esc to cancel)."
                 if selecting_horn
