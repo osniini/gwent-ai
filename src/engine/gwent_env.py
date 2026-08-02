@@ -67,7 +67,7 @@ BOARD_FEATURES = (
 )
 # [board features...] my_lives, opp_lives, opp_hand_len, my_passed, opp_passed,
 # weather×3, horn×6, my_discard×N, opp_discard×N, active_hand×N,
-# redraw active, redraws remaining
+# redraw active, redraws remaining, my score minus opponent score
 MY_PASSED_STATE_INDEX = BOARD_FEATURES + 3
 MY_HORN_STATE_INDEX = BOARD_FEATURES + 5 + len(ROWS)
 GLOBAL_STATE_SIZE = MY_HORN_STATE_INDEX + 2 * len(ROWS)
@@ -76,6 +76,7 @@ OPP_DISCARD_STATE_INDEX = MY_DISCARD_STATE_INDEX + NUM_CARD_TYPES
 HAND_STATE_INDEX = OPP_DISCARD_STATE_INDEX + NUM_CARD_TYPES
 REDRAW_ACTIVE_STATE_INDEX = HAND_STATE_INDEX + NUM_CARD_TYPES
 REDRAWS_REMAINING_STATE_INDEX = REDRAW_ACTIVE_STATE_INDEX + 1
+SCORE_DIFF_STATE_INDEX = REDRAWS_REMAINING_STATE_INDEX + 1
 STARTING_LIVES = 2
 MAX_REDRAWS = 2
 
@@ -105,6 +106,7 @@ class GwentEnv:
         self.discard2 = []
 
         self.current_player = 1
+        self.starting_player = 1
         self.lives = [STARTING_LIVES, STARTING_LIVES]
         self.redraw_active = False
         self.redraws_remaining = {1: 0, 2: 0}
@@ -116,7 +118,7 @@ class GwentEnv:
         self.pass_action = PASS_ACTION
         self.redraw_done_action = REDRAW_DONE_ACTION
         self.action_size = REDRAW_DONE_ACTION + 1
-        self.state_size = REDRAWS_REMAINING_STATE_INDEX + 1
+        self.state_size = SCORE_DIFF_STATE_INDEX + 1
 
     @staticmethod
     def _board_power_features(my_board, opp_board) -> list[int]:
@@ -176,6 +178,7 @@ class GwentEnv:
             *hand_counts(active_hand),
             1 if self.redraw_active else 0,
             self.redraws_remaining[self.current_player],
+            self._score_diff_for_player(self.current_player), # Explicitly include the score difference in the state (redundant in theory)
         ]
 
         return np.array(state, dtype=np.float32)
@@ -244,13 +247,18 @@ class GwentEnv:
         mask[PASS_ACTION] = True
         return mask
 
-    def reset(self):
+    def reset(self, starting_player: int | None = None):
+        """Start a new match, optionally forcing the player who opens."""
+        if starting_player not in (None, 1, 2):
+            raise ValueError("starting_player must be 1, 2, or None")
+
         self.board.reset()
         self.lives = [STARTING_LIVES, STARTING_LIVES]
         self.deferred_round_rewards = {}
         self.last_round_was_tie = False
         self.match_draw = False
-        self.current_player = 1
+        self.starting_player = starting_player or random.choice((1, 2))
+        self.current_player = self.starting_player
         self.discard1 = []
         self.discard2 = []
         self.redraw_active = True
@@ -352,11 +360,11 @@ class GwentEnv:
 
         if action == self.redraw_done_action:
             self._finish_redraw(player)
-            if player == 1:
-                self.current_player = 2
+            if player == self.starting_player:
+                self.current_player = 2 if player == 1 else 1
             else:
                 self.redraw_active = False
-                self.current_player = 1
+                self.current_player = self.starting_player
             return
 
         redrawn_card = self._remove_card_by_type(hand, action)
@@ -609,7 +617,12 @@ class GwentEnv:
             revived_card = self._remove_discard_by_type(active_discard, target_type_id)
             played_value = self._card_reserve_value(medic)
             self.board.place_card(acting_player, medic)
-            self.board.place_card(acting_player, revived_card)
+            revived_target = (
+                2 if acting_player == 1 else 1
+            ) if revived_card.effect == "spy" else acting_player
+            self.board.place_card(revived_target, revived_card)
+            if revived_card.effect == "spy":
+                self._draw_cards(active_hand, active_deck, count=2)
             self.board.recompute_powers()
         elif action in MEDIC_NO_TARGET_ACTIONS.values():
             medic_type_id = next(
