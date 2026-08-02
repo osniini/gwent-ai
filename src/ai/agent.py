@@ -115,6 +115,17 @@ class DQNAgent:
         best_actions = torch.argmax(q_values, dim=1).cpu().numpy()
         return [int(a) for a in best_actions]
 
+    def get_q_values(self, state: np.ndarray) -> np.ndarray:
+        """Return unmasked action values for one state for diagnostics."""
+        state_tensor = torch.as_tensor(
+            state,
+            dtype=torch.float32,
+            device=self.device,
+        ).unsqueeze(0)
+        self.policy_net.eval()
+        with torch.no_grad():
+            return self.policy_net(state_tensor).squeeze(0).cpu().numpy()
+
     def configure_epsilon_decay(self, num_episodes: int) -> None:
         """Per-episode decay so epsilon reaches epsilon_min after num_episodes."""
         if num_episodes <= 0:
@@ -128,7 +139,7 @@ class DQNAgent:
     def train_step(self):
         """Pick a random batch from memory and train the DQN."""
         if len(self.memory) < self.batch_size:
-            return
+            return None
 
         states, actions, rewards, next_states, dones = self.memory.sample(self.batch_size)
 
@@ -164,7 +175,27 @@ class DQNAgent:
         # Backpropagate loss
         self.optimizer.zero_grad()
         loss.backward()
+        grad_norm_sq = 0.0
+        gradients_finite = True
+        for parameter in self.policy_net.parameters():
+            if parameter.grad is None:
+                continue
+            gradient = parameter.grad.detach()
+            gradients_finite &= bool(torch.isfinite(gradient).all())
+            grad_norm_sq += gradient.norm(2).item() ** 2
         self.optimizer.step()
+        td_error = expected_q - current_q
+        return {
+            "loss": loss.item(),
+            "q_mean": current_q.mean().item(),
+            "q_std": current_q.std(unbiased=False).item(),
+            "target_mean": expected_q.mean().item(),
+            "target_std": expected_q.std(unbiased=False).item(),
+            "td_abs_mean": td_error.abs().mean().item(),
+            "td_std": td_error.std(unbiased=False).item(),
+            "grad_norm": grad_norm_sq ** 0.5,
+            "gradients_finite": float(gradients_finite),
+        }
 
     def update_target_network(self):
         """Update the target network with the policy network."""
