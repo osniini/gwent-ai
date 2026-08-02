@@ -11,14 +11,13 @@ from src.ai.evaluation import evaluate_opponent
 from src.ai.metrics import TrainingMetricsLogger
 from src.ai.opponents import LEARNER_PLAYER, dummy_action, random_action
 
-NUM_EPISODES = 500000
-NUM_ENVS = 128
-TRAIN_EVERY = 4
-TRAIN_STEPS_PER_UPDATE = 1
-TARGET_UPDATE_EVERY = 250
-EVALUATION_EVERY = 25000
-FROZEN_EVALUATION_LAG = 5000
-
+NUM_EPISODES = 500000 # Total number of episodes to train for
+NUM_ENVS = 128 # Number of parallel environments to train on
+TRAIN_EVERY = 4 # Run train_step every N global steps
+TRAIN_STEPS_PER_UPDATE = 1 # Number of gradient steps per update
+TARGET_UPDATE_EVERY = 250 # Sync target net, log metrics, refresh frozen pool (every N completed episodes)
+EVALUATION_EVERY = 25000 # Evaluate every N episodes
+FROZEN_EVALUATION_LAG = 5000  # Eval vs newest snapshot saved at least N episodes ago
 
 def _learner_state(env: GwentEnv) -> np.ndarray:
     return env.get_state_for_player(LEARNER_PLAYER)

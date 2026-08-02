@@ -5,8 +5,8 @@ from dataclasses import dataclass
 from src.ai.agent import DQNAgent
 from src.ai.model import DuelingQNetwork
 
-PHASE1_FRAC = 0.05
-PHASE2_FRAC = 0.1
+PHASE1_FRAC = 0.05 # Phase 1: Random exploration
+PHASE2_FRAC = 0.1 # Phase 2: Dummy agent
 OPPO_CHECKPOINT_KEEP = 32
 
 
@@ -17,7 +17,7 @@ def training_phase(episodes_done: int, num_episodes: int) -> str:
         return "random"
     if episodes_done < phase2_end:
         return "dummy"
-    return "frozen"
+    return "frozen" # Phase 3: playing against a previous snapshot of the agent
 
 
 def frozen_episode_count(num_episodes: int) -> int:

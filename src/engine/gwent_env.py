@@ -17,6 +17,8 @@ MEDIC_CARD_TYPES = tuple(
     for type_id, card in enumerate(CARD_CATALOG)
     if card.get("effect") == "medic"
 )
+
+# Action indices
 HORN_ACTION_START = NUM_CARD_TYPES
 HORN_ACTIONS = {
     row: HORN_ACTION_START + index
@@ -52,6 +54,8 @@ MEDIC_NO_TARGET_ACTIONS = {
 }
 PASS_ACTION = MEDIC_NO_TARGET_ACTION_START + len(MEDIC_NO_TARGET_ACTIONS)
 REDRAW_DONE_ACTION = PASS_ACTION + 1
+
+# State section sizes
 # Per side: current hero power for each of melee/ranged/siege (3), times 2 sides.
 HERO_POWER_FEATURES = 2 * len(ROWS)
 # Per side: non-hero unit count and base power total per row (6), times 2 sides.
@@ -65,6 +69,8 @@ BOARD_FEATURES = (
     + BOARD_COMPOSITION_FEATURES
     + BOARD_CARD_COUNT_FEATURES
 )
+
+# State indices mainly for legal action mask, should get rid of magic numbers
 # [board features...] my_lives, opp_lives, opp_hand_len, my_passed, opp_passed,
 # weather×3, horn×6, my_discard×N, opp_discard×N, active_hand×N,
 # redraw active, redraws remaining, my score minus opponent score
@@ -77,22 +83,28 @@ HAND_STATE_INDEX = OPP_DISCARD_STATE_INDEX + NUM_CARD_TYPES
 REDRAW_ACTIVE_STATE_INDEX = HAND_STATE_INDEX + NUM_CARD_TYPES
 REDRAWS_REMAINING_STATE_INDEX = REDRAW_ACTIVE_STATE_INDEX + 1
 SCORE_DIFF_STATE_INDEX = REDRAWS_REMAINING_STATE_INDEX + 1
+
+# Game constants
 STARTING_LIVES = 2
 MAX_REDRAWS = 2
 
-ROUND_WIN_REWARD = 0.0
-MATCH_WIN_REWARD = 1.0
-TERMINAL_UNUSED_UNIT_POWER_PENALTY_SCALE = 0.0
-SCORE_DIFF_SCALE = 0.0
-ROUND_SEALED_PASS_SCALE = 0.0
-CARD_PLAY_COST_SCALE = 0.0
-CARD_PLAY_AHEAD_PENALTY_SCALE = 0.0
-ROUND_WIN_HAND_SAVE_SCALE = 0.0
-PASS_WITHOUT_LEAD_PENALTY = 0.0
-PASS_WHILE_LEADING_OPEN_PENALTY = 0.0
 WEATHER_RESERVE_VALUE = 4
 HORN_RESERVE_VALUE = 5
 DECOY_RESERVE_VALUE = 3
+
+# Reward shaping
+ROUND_WIN_REWARD = 0.0  # Deferred reward/penalty for winning/losing a round
+TERMINAL_UNUSED_UNIT_POWER_PENALTY_SCALE = 0.0  # Extra penalty on match loss for unused unit power in hand
+SCORE_DIFF_SCALE = 0.0  # Per-action reward for change in score differential
+ROUND_SEALED_PASS_SCALE = 0.0  # Bonus for passing to seal the round while ahead with cards saved
+CARD_PLAY_COST_SCALE = 0.0  # Tax on playing a card's strategic reserve value when hand-saving matters
+CARD_PLAY_AHEAD_PENALTY_SCALE = 0.0  # Penalty for spending cards while already ahead (non-final round)
+ROUND_WIN_HAND_SAVE_SCALE = 0.0  # Bonus for winning a round with unused hand value
+PASS_WITHOUT_LEAD_PENALTY = 0.0  # Penalty for passing while tied or behind
+PASS_WHILE_LEADING_OPEN_PENALTY = 0.0  # Penalty for passing while ahead on last life with opponent still active
+
+# Reward for winning the match, apparently all that was needed to make the agent play better
+MATCH_WIN_REWARD = 1.0
 
 
 class GwentEnv:
@@ -477,10 +489,6 @@ class GwentEnv:
             return 0.0
         return ROUND_SEALED_PASS_SCALE * self._hand_value(hand) * scale
 
-    @staticmethod
-    def _perspective_from_p1(player: int, p1_positive: float) -> float:
-        return p1_positive if player == 1 else -p1_positive
-
     def _round_win_hand_bonus(self, player: int, outcome: int) -> float:
         """Bonus for winning the round with unused hand value."""
         if outcome == 0:
@@ -687,7 +695,7 @@ class GwentEnv:
         return self._get_state(), reward, done
 
     def _check_round_end(self) -> int:
-        """Return +1 if P1 won the round, -1 if P2 won, 0 on a tie."""
+        """Return +1 if P1 won the round, -1 if P2 won, 0 on a tie. Not rewards."""
         p1_score, p2_score = self.board.get_scores()
         self.last_round_was_tie = False
         self.match_draw = False

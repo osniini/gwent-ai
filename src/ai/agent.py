@@ -14,10 +14,10 @@ class DQNAgent:
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         # Hyperparameters
-        self.memory = ReplayBuffer(capacity=30000)
+        self.memory = ReplayBuffer(capacity=30000) # Max transitions to store in memory
         self.gamma = 0.995 # Discount factor for future rewards
-        self.epsilon = 1.0
-        self.epsilon_min = 0.05
+        self.epsilon = 1.0 # Exploration rate
+        self.epsilon_min = 0.05 # Minimum exploration rate
         self.epsilon_decay = 1.0  # set via configure_epsilon_decay()
         self.batch_size = 256 # Memory batch size for training
         self.learning_rate = 0.0005 # Learning rate
@@ -75,9 +75,9 @@ class DQNAgent:
         with torch.no_grad():
             q_values = self.policy_net(states_tensor)
 
-        neg_inf = torch.tensor(float("-inf"), device=self.device)
-        q_values = torch.where(masks_tensor, q_values, neg_inf)
-        best_actions = torch.argmax(q_values, dim=1).cpu().numpy()
+        neg_inf = torch.tensor(float("-inf"), device=self.device) # -inf for illegal actions
+        q_values = torch.where(masks_tensor, q_values, neg_inf) 
+        best_actions = torch.argmax(q_values, dim=1).cpu().numpy() # argmax the q-values for the best action
 
         for j, i in enumerate(exploit_indices):
             actions[i] = int(best_actions[j])
@@ -166,6 +166,8 @@ class DQNAgent:
             best_next_actions = next_q_policy.argmax(dim=1, keepdim=True)
 
             next_q_target = self.target_net(next_states_tensor).gather(1, best_next_actions).squeeze(1)
+
+            # Q(s,a) = r + γ * Qt(s', argmax_a' Qp(s', a'))
             expected_q = rewards_tensor + (1 - dones_tensor) * self.gamma * next_q_target
 
         # Calculate loss by comparing the predicted Q-value with the expected Q-value
@@ -175,6 +177,8 @@ class DQNAgent:
         # Backpropagate loss
         self.optimizer.zero_grad()
         loss.backward()
+
+        # Track training metrics
         grad_norm_sq = 0.0
         gradients_finite = True
         for parameter in self.policy_net.parameters():
