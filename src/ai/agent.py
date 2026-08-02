@@ -14,13 +14,13 @@ class DQNAgent:
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         # Hyperparameters
-        self.memory = ReplayBuffer(capacity=30000) # Max transitions to store in memory
+        self.memory = ReplayBuffer(capacity=200000) # Max transitions to store in memory
         self.gamma = 0.995 # Discount factor for future rewards
         self.epsilon = 1.0 # Exploration rate
         self.epsilon_min = 0.05 # Minimum exploration rate
         self.epsilon_decay = 1.0  # set via configure_epsilon_decay()
         self.batch_size = 256 # Memory batch size for training
-        self.learning_rate = 0.0005 # Learning rate
+        self.learning_rate = 0.000125 # Learning rate
 
         # 2 Networks for DQN: Main and Target
         self.policy_net = DuelingQNetwork(state_size, action_size).to(self.device)

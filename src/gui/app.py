@@ -1,7 +1,7 @@
 import numpy as np
 import customtkinter as ctk
 from src.ai.agent import DQNAgent
-from src.engine.card import CARD_CATALOG, NUM_CARD_TYPES
+from src.engine.card import NUM_CARD_TYPES
 from src.engine.gwent_env import (
     DECOY_ACTIONS,
     DECOY_CARD_TYPE,
@@ -43,7 +43,7 @@ class GwentApp(ctk.CTk):
 
         self.agent = DQNAgent(self.env.state_size, self.env.action_size)
         try:
-            self.agent.load("models/gwent_agent_gamma.pth")
+            self.agent.load("models/gwent_agent_delta.pth")
         except Exception as exc:    
             print(f"Could not load model (retrain needed): {exc}")
         self.agent.epsilon = 0  # no random exploration in the GUI
@@ -194,46 +194,8 @@ class GwentApp(ctk.CTk):
             return
 
         state = self.env._get_state()
-        q_values = self.agent.get_q_values(state)
         action = self.agent.select_action(state, legal)
-        legal_actions = np.flatnonzero(legal)
-        q_value_summary = " | ".join(
-            f"{self._action_label(legal_action)}={q_values[legal_action]:.3f}"
-            for legal_action in legal_actions
-        )
-        print(f"AI legal Q-values: {q_value_summary}")
-        print(
-            f"AI selected: {self._action_label(action)} "
-            f"(Q={q_values[action]:.3f})"
-        )
-        if action == self.env.pass_action and self.env.lives[1] <= 1:
-            print(f"AI passed on final life with hand: {self.env.hand2}") # DEBUG print for final life pass
         self._apply_action(action)
-
-    @staticmethod
-    def _action_label(action: int) -> str:
-        if action < NUM_CARD_TYPES:
-            return CARD_CATALOG[action]["name"]
-        if action == PASS_ACTION:
-            return "Pass"
-        if action == REDRAW_DONE_ACTION:
-            return "Done redrawing"
-        for row, horn_action in HORN_ACTIONS.items():
-            if action == horn_action:
-                return f"Commander's Horn ({row})"
-        for type_id, decoy_action in DECOY_ACTIONS.items():
-            if action == decoy_action:
-                return f"Decoy → {CARD_CATALOG[type_id]['name']}"
-        for (medic_type_id, target_type_id), medic_action in MEDIC_ACTIONS.items():
-            if action == medic_action:
-                return (
-                    f"{CARD_CATALOG[medic_type_id]['name']} → "
-                    f"{CARD_CATALOG[target_type_id]['name']}"
-                )
-        for medic_type_id, medic_action in MEDIC_NO_TARGET_ACTIONS.items():
-            if action == medic_action:
-                return f"{CARD_CATALOG[medic_type_id]['name']} (no revive)"
-        return f"Action {action}"
 
     def _apply_action(self, action: int):
         prev_lives = list(self.env.lives)
