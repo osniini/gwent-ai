@@ -73,7 +73,7 @@ class DQNAgent:
 
         self.policy_net.eval()
         with torch.no_grad():
-            q_values = self.policy_net(states_tensor)
+            q_values = self.policy_net(states_tensor, masks_tensor)
 
         neg_inf = torch.tensor(float("-inf"), device=self.device) # -inf for illegal actions
         q_values = torch.where(masks_tensor, q_values, neg_inf) 
@@ -108,23 +108,12 @@ class DQNAgent:
 
         net.eval()
         with torch.no_grad():
-            q_values = net(states_tensor)
+            q_values = net(states_tensor, masks_tensor)
 
         neg_inf = torch.tensor(float("-inf"), device=self.device)
         q_values = torch.where(masks_tensor, q_values, neg_inf)
         best_actions = torch.argmax(q_values, dim=1).cpu().numpy()
         return [int(a) for a in best_actions]
-
-    def get_q_values(self, state: np.ndarray) -> np.ndarray:
-        """Return unmasked action values for one state for diagnostics."""
-        state_tensor = torch.as_tensor(
-            state,
-            dtype=torch.float32,
-            device=self.device,
-        ).unsqueeze(0)
-        self.policy_net.eval()
-        with torch.no_grad():
-            return self.policy_net(state_tensor).squeeze(0).cpu().numpy()
 
     def configure_epsilon_decay(self, num_episodes: int) -> None:
         """Per-episode decay so epsilon reaches epsilon_min after num_episodes."""
@@ -149,23 +138,29 @@ class DQNAgent:
         next_states_tensor = torch.as_tensor(next_states, dtype=torch.float32, device=self.device)
         dones_tensor = torch.as_tensor(dones, dtype=torch.float32, device=self.device)
 
+        current_legal = torch.as_tensor(
+            np.stack([GwentEnv.legal_mask_from_state(s) for s in states]),
+            dtype=torch.bool,
+            device=self.device,
+        )
+        next_legal = torch.as_tensor(
+            np.stack([GwentEnv.legal_mask_from_state(s) for s in next_states]),
+            dtype=torch.bool,
+            device=self.device,
+        )
+
         # What is the Q-value of the action we took?
-        current_q = self.policy_net(states_tensor).gather(1, actions_tensor).squeeze(1)
+        current_q = self.policy_net(states_tensor, current_legal).gather(1, actions_tensor).squeeze(1)
 
         # What was actually the best action in the next state?
         with torch.no_grad():
-            next_legal = torch.as_tensor(
-                np.stack([GwentEnv.legal_mask_from_state(s) for s in next_states]),
-                dtype=torch.bool,
-                device=self.device,
-            )
             neg_inf = torch.tensor(float("-inf"), device=self.device)
 
-            next_q_policy = self.policy_net(next_states_tensor)
+            next_q_policy = self.policy_net(next_states_tensor, next_legal)
             next_q_policy = torch.where(next_legal, next_q_policy, neg_inf)
             best_next_actions = next_q_policy.argmax(dim=1, keepdim=True)
 
-            next_q_target = self.target_net(next_states_tensor).gather(1, best_next_actions).squeeze(1)
+            next_q_target = self.target_net(next_states_tensor, next_legal).gather(1, best_next_actions).squeeze(1)
 
             # Q(s,a) = r + γ * Qt(s', argmax_a' Qp(s', a'))
             expected_q = rewards_tensor + (1 - dones_tensor) * self.gamma * next_q_target

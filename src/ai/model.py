@@ -24,11 +24,22 @@ class DuelingQNetwork(nn.Module):
             nn.Linear(64, action_size),
         )
 
-    def forward(self, state: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        state: torch.Tensor,
+        legal_mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         features = self.feature_network(state)
         values = self.value_stream(features)
         advantages = self.advantage_stream(features)
 
-        # Q(s,a) = V(s) + (A(s,a) - mean(A(s, a)))
-        q_values = values + (advantages - advantages.mean(dim=1, keepdim=True))
+        if legal_mask is None:
+            mean_advantages = advantages.mean(dim=1, keepdim=True)
+        else:
+            mask = legal_mask.to(dtype=advantages.dtype)
+            legal_count = mask.sum(dim=1, keepdim=True).clamp(min=1.0)
+            mean_advantages = (advantages * mask).sum(dim=1, keepdim=True) / legal_count
+
+        # Q(s,a) = V(s) + (A(s,a) - mean(A(s, a) over legal actions))
+        q_values = values + (advantages - mean_advantages)
         return q_values

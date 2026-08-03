@@ -324,7 +324,7 @@ def train_gwent(
             if episodes_done < num_episodes:
                 _reset_tracker(tracker)
 
-    agent.save("models/gwent_agent_delta.pth")
+    agent.save("models/gwent_agent_epsilon.pth")
     metrics_logger.close()
 
 
