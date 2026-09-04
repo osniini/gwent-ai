@@ -43,7 +43,7 @@ class GwentApp(ctk.CTk):
 
         self.agent = DQNAgent(self.env.state_size, self.env.action_size)
         try:
-            self.agent.load("models/gwent_agent_epsilon.pth")
+            self.agent.load("models/gwent_agent_gamma.pth")
         except Exception as exc:    
             print(f"Could not load model (retrain needed): {exc}")
         self.agent.epsilon = 0  # no random exploration in the GUI
