@@ -15,19 +15,19 @@ Gwent is treated as a 2 player, turn based Markov Decision Process.
 - State $s \in \mathbb{R}^d$, where $d = \texttt{statesize}$ (currently 305, derived from the game: setup mimics what the player sees, no cheating😄).
 - Action $a \in 0, ..., A - 1$, $A = \texttt{actionsize}$ (currently 88: card types to play, special card targets, pass, skip redraw).
 - Legal mask $m(s) \in 0,1^A$: allowed actions
-- Reward $r_t$: functionality for reward shaping exists but only having +1/-1/-1 for W/D/L seemed to work the best.
+- Reward $r_{t}$: functionality for reward shaping exists but only having +1/-1/-1 for W/D/L seemed to work the best.
 - Discount factor $\gamma$: rewards $k$ steps ahead are scaled by $\gamma^k$.
 
 Two identical Dueling Q-networks:
 
-- Policy net $Q_P$: updated each training step by gradient descent.
-- Target net $Q_T$: frozen between syncs; weights copied from $Q_P$ every `TARGET_UPDATE_EVERY` episodes.
+- Policy net $Q_{P}$: updated each training step by gradient descent.
+- Target net $Q_{T}$: frozen between syncs; weights copied from $Q_{P}$ every `TARGET_UPDATE_EVERY` episodes.
 
-DQN Architecture:
+DQN Architecture ([`model.py`](src/ai/model.py)):
 
-Shared feature layers: $d = 305 \xrightarrow{\text{Lin}} 128 \xrightarrow{\text{ReLU}} 128 \xrightarrow{\text{Lin}} 128$  
-Value head: $128 \xrightarrow{\text{Lin}} 64 \xrightarrow{\text{ReLU}} 1$  
-Advantage head: $128 \xrightarrow{\text{Lin}} 64 \xrightarrow{\text{ReLU}} A$
+- Shared trunk: `305 → Linear(128) + ReLU → Linear(128) + ReLU`
+- Value stream: `128 → Linear(64) + ReLU → Linear(1)`
+- Advantage stream: `128 → Linear(64) + ReLU → Linear(A)`
 
 Learner transitions are stored in `ReplayBuffer` as tuples $(s, a, r, s', \texttt{done})$ and sampled uniformly at random.
 
@@ -36,75 +36,75 @@ Hyperparameters listed in **Configuration**.
 ### Algorithm
 
 **Step 1. Dueling Q-value**  
-On a forward pass, the network outputs a state value $V_P(s)$ and per-action advantages $A_P(s,a)$. These are combined into Q-values for every action:
+On a forward pass, the network outputs a state value $V_{P}(s)$ and per-action advantages $A_{P}(s,a)$. These are combined into Q-values for every action:
 
-$$
-Q_P(s,a) = V_P(s) + \left(A_P(s,a) - \bar{A}_P(s)\right)
-$$
+```math
+Q_{P}(s,a) = V_{P}(s) + \left(A_{P}(s,a) - \bar{A}_{P}(s)\right)
+```
 
-where $\bar{A}_P(s)$ is the mean advantage over **legal** actions in $s$.
+where $\bar{A}_{P}(s)$ is the mean advantage over **legal** actions in $s$.
 
 Illegal actions are masked before $\arg\max$:
 
-$$
+```math
 Q_{\mathrm{masked}}(s,a) =
 \begin{cases}
-Q_P(s,a) & m(s)_a = 1 
+Q_{P}(s,a) & m(s)_{a} = 1 \\
 -\infty & \text{otherwise}
 \end{cases}
-$$
+```
 
 **Step 2. Action selection**  
 Training uses *Epsilon-Greedy Algorithm* on the policy net. (Evaluation, snapshot opponents, and GUI opponent use greedy: $\varepsilon = 0$).
 
-$$
+```math
 a =
 \begin{cases}
-\text{uniform random from } L(s) & \text{with probability } \varepsilon 
+\text{uniform random from } L(s) & \text{with probability } \varepsilon \\
 \arg\max_{a \in L(s)} Q_{\mathrm{masked}}(s,a) & \text{otherwise}
 \end{cases}
-$$
+```
 
 where $L$ is the set of legal actions.
 
 Per completed episode:
 
-$$
-\text{decay} = \left(\frac{\varepsilon_{\min}}{\varepsilon_0}\right)^{1/N}, \qquad \varepsilon \leftarrow \max(\varepsilon_{\min}, \varepsilon \cdot \text{decay})
-$$
+```math
+\text{decay} = \left(\frac{\varepsilon_{\min}}{\varepsilon_{0}}\right)^{1/N}, \qquad \varepsilon \leftarrow \max(\varepsilon_{\min}, \varepsilon \cdot \text{decay})
+```
 
-where $\varepsilon_0$ is the initial exploration rate, $\varepsilon_{\min}$ is the minimum exploration rate, and $N$ = total training episodes.
+where $\varepsilon_{0}$ is the initial exploration rate, $\varepsilon_{\min}$ is the minimum exploration rate, and $N$ = total training episodes.
 
 **Step 3. Temporal Difference target (Double DQN)**  
-Sample a minibatch of size $B$ uniformly from replay. The next action $a^*$ is chosen with $Q_P$, but its value is read from $Q_T$. For each transition:
+Sample a minibatch of size $B$ uniformly from replay. The next action $a^{*}$ is chosen with $Q_{P}$, but its value is read from $Q_{T}$. For each transition:
 
-$$
-\hat{Q} = Q_P(s,a)
-$$
+```math
+\hat{Q} = Q_{P}(s,a)
+```
 
-$$
-a^* = \arg\max_{a' \in L(s')} Q_{P\mathrm{masked}}(s', a')
-$$
+```math
+a^{*} = \arg\max_{a' \in L(s')} Q_{P,\mathrm{masked}}(s', a')
+```
 
-$$
-y = r + (1 - d)\gamma Q_T(s', a^*)
-$$
+```math
+y = r + (1 - d)\gamma Q_{T}(s', a^{*})
+```
 
 - $B = 256$: minibatch size (`batch_size`)
 - $(s, a, r, s', d)$: one sampled transition: $s'$ is the next learner-perspective state, $r$ is reward since the previous learner step, $d = 1$ if the match ended
 - $\hat{Q}$: policy-net estimate of how good action $a$ was in state $s$
-- $a^*$: best legal next action according to $Q_{P\mathrm{masked}}$ in $s'$
+- $a^{*}$: best legal next action according to $Q_{P,\mathrm{masked}}$ in $s'$
 - $y$ (TD target): reward + discounted future value or just $r$ when $d = 1$
 
 **Step 4. Loss and Update**
 
 Mean squared error (MSE) loss:
 
-$$
-\mathcal{L} = \frac{1}{B} \sum_{i=1}^{B} (\hat{Q}_i - y_i)^2
-$$
+```math
+\mathcal{L} = \frac{1}{B} \sum_{i=1}^{B} (\hat{Q}_{i} - y_{i})^{2}
+```
 
-Gradients flow only through $Q_P$ (policy net): **Adam** updates its weights. $Q_T$ is not backpropagated, it is synced from $Q_P$ every `TARGET_UPDATE_EVERY` episodes.
+Gradients flow only through $Q_{P}$ (policy net): **Adam** updates its weights. $Q_{T}$ is not backpropagated, it is synced from $Q_{P}$ every `TARGET_UPDATE_EVERY` episodes.
 
 `train_step()` runs every `TRAIN_EVERY` environment steps, `TRAIN_STEPS_PER_UPDATE` times per trigger.
 
@@ -216,14 +216,14 @@ Inactive shaping constants (`ROUND_WIN_REWARD`, `SCORE_DIFF_SCALE`, `CARD_PLAY_C
 | Parameter         | Value                                      | Notes                                                                |
 | ----------------- | ------------------------------------------ | -------------------------------------------------------------------- |
 | `gamma`           | `0.995`                                    | discount factor                                                      |
-| `learning_rate`   | `0.000125`                                 | Adam on $Q_P$ only                                                   |
+| `learning_rate`   | `0.000125`                                 | Adam on policy net only                                              |
 | Optimizer         | Adam                                       | PyTorch defaults: `betas=(0.9, 0.999)`, `eps=1e-8`, `weight_decay=0` |
-| Loss              | `MSELoss`                                  | on TD target vs $Q_P(s,a)$                                           |
+| Loss              | `MSELoss`                                  | on TD target vs policy-net Q(s,a)                                    |
 | `batch_size`      | 256                                        | replay minibatch                                                     |
 | `memory` capacity | 200000                                     | uniform random sampling                                              |
 | `epsilon` (start) | `1.0`                                      | reset at train start                                                 |
 | `epsilon_min`     | `0.05`                                     | floor after decay                                                    |
-| `epsilon_decay`   | $(\varepsilon_{\min}/\varepsilon_0)^{1/N}$ | per completed episode; $N$ = `NUM_EPISODES`                          |
+| `epsilon_decay`   | per-episode geometric decay                | reaches `epsilon_min` after `NUM_EPISODES`                           |
 | Target sync       | full copy                                  | `target_net ← policy_net` every `TARGET_UPDATE_EVERY` episodes       |
 | Device            | CUDA if available, else CPU                |                                                                      |
 
