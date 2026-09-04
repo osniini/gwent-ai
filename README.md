@@ -280,6 +280,6 @@ Inactive shaping constants (`ROUND_WIN_REWARD`, `SCORE_DIFF_SCALE`, `CARD_PLAY_C
 | ------------------------------ | ------------------------------------------------------------ |
 | `metrics/training_metrics.csv` | checkpoint metrics every 250 episodes (overwritten each run) |
 | `runs/<YYYYMMDD-HHMMSS>/`      | TensorBoard (training + eval)                                |
-| `models/<model_name>.pth`      | final policy weights after training                          |
+| `models/<model>.pth`           | final policy weights after training                          |
 
 
