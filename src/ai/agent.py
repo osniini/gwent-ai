@@ -208,7 +208,8 @@ class DQNAgent:
 
     def load(self, path: str):
         """Load the model from a file."""
-        self.policy_net.load_state_dict(torch.load(path))
+        state_dict = torch.load(path, map_location=self.device)
+        self.policy_net.load_state_dict(state_dict)
         self.target_net.load_state_dict(self.policy_net.state_dict())
         print(f"Model loaded from {path}")
         
