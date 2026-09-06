@@ -284,19 +284,6 @@ class PlayerWidget(ctk.CTkFrame):
         )
         self.cards_label.pack(pady=(0, 6))
 
-        ctk.CTkLabel(
-            self,
-            text="Match",
-            font=ctk.CTkFont(size=10),
-            text_color="#888888",
-        ).pack()
-        ctk.CTkLabel(
-            self,
-            text=f"{LIVES_PER_PLAYER} lives",
-            font=ctk.CTkFont(size=9),
-            text_color="#666666",
-        ).pack(pady=(0, 4))
-
         self.round_pips_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.round_pips_frame.pack(pady=(0, 8))
         self.round_pips: list[ctk.CTkLabel] = []
