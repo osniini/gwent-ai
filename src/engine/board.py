@@ -166,10 +166,11 @@ class GameBoard:
                 )
                 if morale_boost_count:
                     for card in cards:
-                        if not card.unit:
+                        if not card.unit or card.hero:
                             continue
-                        # Every Morale Boost unit adds +1 to every other unit
-                        # on its row; boosts can therefore affect each other.
+                        # Every Morale Boost unit adds +1 to every other
+                        # non-hero unit on its row; boosts can therefore
+                        # affect each other.
                         own_boost = 1 if card.effect == "morale_boost" else 0
                         card.current_power += morale_boost_count - own_boost
 
