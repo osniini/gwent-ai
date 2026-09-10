@@ -280,8 +280,8 @@ class GwentEnv:
         self.deck1 = create_deck()
         self.deck2 = create_deck()
 
-        self.hand1 = [self.deck1.pop() for _ in range(min(8, len(self.deck1)))]
-        self.hand2 = [self.deck2.pop() for _ in range(min(8, len(self.deck2)))]
+        self.hand1 = [self.deck1.pop() for _ in range(min(10, len(self.deck1)))]
+        self.hand2 = [self.deck2.pop() for _ in range(min(10, len(self.deck2)))]
 
         return self._get_state()
 
@@ -672,8 +672,11 @@ class GwentEnv:
             reward -= self._pass_without_lead_penalty(acting_player, passed=True)
             reward -= self._pass_while_leading_open_penalty(acting_player, passed=True)
 
+        round_winner = None
         if round_ending:
             round_outcome = self._check_round_end()
+            if round_outcome != 0:
+                round_winner = 1 if round_outcome == 1 else 2
             if not self.match_draw:
                 self._set_deferred_round_rewards(round_outcome)
             reward += self.deferred_round_rewards.pop(acting_player, 0.0)
@@ -681,7 +684,9 @@ class GwentEnv:
         next_player = 2 if self.current_player == 1 else 1
         next_board = self.board.player2 if next_player == 2 else self.board.player1
 
-        if not next_board.passed:
+        if round_winner is not None:
+            self.current_player = round_winner
+        elif not next_board.passed:
             self.current_player = next_player
         elif active_board.passed:
             pass
