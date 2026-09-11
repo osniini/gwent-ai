@@ -12,7 +12,7 @@ This repo implements Gwent as a reinforcement-learning environment and trains a 
 
 Gwent is treated as a 2 player, turn based Markov Decision Process. 
 
-- State $s \in \mathbb{R}^d$, where $d = \texttt{statesize}$ (currently 305, derived from the game: setup mimics what the player sees, no cheating😄).
+- State $s \in \mathbb{R}^d$, where $d = \texttt{statesize}$ (currently 177, derived from the game: setup mimics what the player sees, no cheating😄).
 - Action $a \in 0, ..., A - 1$, $A = \texttt{actionsize}$ (currently 88: card types to play, special card targets, pass, skip redraw).
 - Legal mask $m(s) \in 0,1^A$: allowed actions
 - Reward $r_{t}$: functionality for reward shaping exists but only having +1/-1/-1 for W/D/L seemed to work the best.
@@ -25,7 +25,7 @@ Two identical Dueling Q-networks:
 
 DQN Architecture ([`model.py`](src/ai/model.py)):
 
-- Shared trunk: `305 → Linear(128) + ReLU → Linear(128) + ReLU`
+- Shared trunk: `177 → Linear(128) + ReLU → Linear(128) + ReLU`
 - Value stream: `128 → Linear(64) + ReLU → Linear(1)`
 - Advantage stream: `128 → Linear(64) + ReLU → Linear(A)`
 

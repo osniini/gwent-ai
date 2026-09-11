@@ -55,20 +55,54 @@ MEDIC_NO_TARGET_ACTIONS = {
 PASS_ACTION = MEDIC_NO_TARGET_ACTION_START + len(MEDIC_NO_TARGET_ACTIONS)
 REDRAW_DONE_ACTION = PASS_ACTION + 1
 
+# Types that can actually sit on a row: that row's units, plus Decoy (swaps in).
+BOARD_TYPES_BY_ROW = {
+    row: tuple(
+        (
+            *(
+                type_id
+                for type_id, card in enumerate(CARD_CATALOG)
+                if card.get("row") == row
+            ),
+            DECOY_CARD_TYPE,
+        )
+    )
+    for row in ROWS
+}
+BOARD_COUNT_LOCAL_INDEX = {
+    (row, type_id): index
+    for row, type_ids in BOARD_TYPES_BY_ROW.items()
+    for index, type_id in enumerate(type_ids)
+}
+BOARD_ROW_OFFSET = {}
+_row_offset = 0
+for _row in ROWS:
+    BOARD_ROW_OFFSET[_row] = _row_offset
+    _row_offset += len(BOARD_TYPES_BY_ROW[_row])
+BOARD_COUNTS_PER_SIDE = _row_offset
+
 # State section sizes
 # Per side: current hero power for each of melee/ranged/siege (3), times 2 sides.
 HERO_POWER_FEATURES = 2 * len(ROWS)
 # Per side: non-hero unit count and base power total per row (6), times 2 sides.
 BOARD_COMPOSITION_FEATURES = 2 * 2 * len(ROWS)
 MY_BOARD_CARD_COUNT_STATE_INDEX = HERO_POWER_FEATURES + BOARD_COMPOSITION_FEATURES
-# Per side and row: count of each card type. This lets the agent identify
-# same-name units already present for effects such as Tight Bond.
-BOARD_CARD_COUNT_FEATURES = 2 * len(ROWS) * NUM_CARD_TYPES
+# Per side and row: compact counts of types that can occupy that row (Tight Bond, decoy).
+BOARD_CARD_COUNT_FEATURES = 2 * BOARD_COUNTS_PER_SIDE
 BOARD_FEATURES = (
     HERO_POWER_FEATURES
     + BOARD_COMPOSITION_FEATURES
     + BOARD_CARD_COUNT_FEATURES
 )
+
+
+def _my_board_count_index(row: str, type_id: int) -> int:
+    """State index for how many of ``type_id`` sit on my ``row``."""
+    return (
+        MY_BOARD_CARD_COUNT_STATE_INDEX
+        + BOARD_ROW_OFFSET[row]
+        + BOARD_COUNT_LOCAL_INDEX[row, type_id]
+    )
 
 # State indices mainly for legal action mask, should get rid of magic numbers
 # [board features...] my_lives, opp_lives, opp_hand_len, my_passed, opp_passed,
@@ -131,6 +165,11 @@ class GwentEnv:
         self.redraw_done_action = REDRAW_DONE_ACTION
         self.action_size = REDRAW_DONE_ACTION + 1
         self.state_size = SCORE_DIFF_STATE_INDEX + 1
+        if len(self._get_state()) != self.state_size:
+            raise RuntimeError(
+                f"State layout mismatch: built {len(self._get_state())}, "
+                f"expected {self.state_size}"
+            )
 
     @staticmethod
     def _board_power_features(my_board, opp_board) -> list[int]:
@@ -144,9 +183,9 @@ class GwentEnv:
                 features.extend((unit_count, base_power_total))
         for board in (my_board, opp_board):
             for row in ROWS:
-                row_counts = [0] * NUM_CARD_TYPES
+                row_counts = [0] * len(BOARD_TYPES_BY_ROW[row])
                 for card in board.rows[row]:
-                    row_counts[card.type_id] += 1
+                    row_counts[BOARD_COUNT_LOCAL_INDEX[row, card.type_id]] += 1
                 features.extend(row_counts)
         return features
 
@@ -233,15 +272,8 @@ class GwentEnv:
                     mask[HORN_ACTIONS[row]] = True
         if state[HAND_STATE_INDEX + DECOY_CARD_TYPE] > 0:
             for type_id, action in DECOY_ACTIONS.items():
-                on_my_board = sum(
-                    state[
-                        MY_BOARD_CARD_COUNT_STATE_INDEX
-                        + row_index * NUM_CARD_TYPES
-                        + type_id
-                    ]
-                    for row_index in range(len(ROWS))
-                )
-                if on_my_board > 0:
+                row = CARD_CATALOG[type_id]["row"]
+                if state[_my_board_count_index(row, type_id)] > 0:
                     mask[action] = True
         has_medic_target = any(
             state[MY_DISCARD_STATE_INDEX + target_type_id] > 0
