@@ -1,5 +1,8 @@
 """Greedy, no-learning policy evaluations."""
 
+import copy
+from pathlib import Path
+
 import numpy as np
 
 from src.ai.agent import DQNAgent
@@ -8,6 +11,66 @@ from src.ai.opponents import LEARNER_PLAYER, dummy_action, random_action
 from src.engine.gwent_env import GwentEnv
 
 EVAL_PARALLEL_ENVS = 128
+RANDOM_EVALUATION_MATCHES = 300
+DUMMY_EVALUATION_MATCHES = 300
+FROZEN_EVALUATION_MATCHES = 300
+FROZEN_EVALUATION_LAG = 5000
+ANCHOR_EVALUATION_MATCHES = 2000
+
+
+class AnchorPool:
+    """Permanent evaluation snapshots for measuring long-term progress."""
+
+    def __init__(self, directory: str | Path = "models"):
+        self.directory = Path(directory)
+        self.anchors: dict[int, DuelingQNetwork] = {}
+
+    @staticmethod
+    def is_anchor_episode(episode: int) -> bool:
+        """Save anchors at 25k, 50k, then every 100k episodes."""
+        return episode in (25000, 50000) or (
+            episode >= 100000 and episode % 100000 == 0
+        )
+
+    @staticmethod
+    def anchor_episodes_up_to(num_episodes: int) -> tuple[int, ...]:
+        """Return all anchor milestones reached during a training run."""
+        early_anchors = tuple(
+            episode for episode in (25000, 50000) if episode <= num_episodes
+        )
+        return early_anchors + tuple(range(100000, num_episodes + 1, 100000))
+
+    @staticmethod
+    def is_evaluation_episode(episode: int) -> bool:
+        """Evaluate existing anchors at 50k, then every 100k episodes."""
+        return episode == 50000 or (episode >= 100000 and episode % 100000 == 0)
+
+    def save(self, agent: DQNAgent, episode: int) -> None:
+        """Save and retain a policy snapshot for all later anchor evaluations."""
+        if not self.is_anchor_episode(episode):
+            return
+
+        path = self.directory / f"gwent_agent_{episode // 1000}k.pth"
+        self.directory.mkdir(parents=True, exist_ok=True)
+        agent.save(str(path))
+
+        anchor = copy.deepcopy(agent.policy_net)
+        anchor.eval()
+        for parameter in anchor.parameters():
+            parameter.requires_grad_(False)
+        self.anchors[episode] = anchor
+
+    def evaluate(self, agent: DQNAgent) -> dict[str, dict[str, int]]:
+        """Run fixed-size greedy evaluations against prior anchor policies."""
+        return {
+            f"anchor_{episode // 1000}k": evaluate_opponent(
+                agent,
+                opponent="frozen",
+                matches=ANCHOR_EVALUATION_MATCHES,
+                opponent_net=opponent_net,
+            )
+            for episode, opponent_net in self.anchors.items()
+        }
 
 
 def evaluate_opponent(

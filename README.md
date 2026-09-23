@@ -12,7 +12,7 @@ This repo implements Gwent as a reinforcement-learning environment and trains a 
 
 Gwent is treated as a 2 player, turn based Markov Decision Process. 
 
-- State $s \in \mathbb{R}^d$, where $d = \texttt{statesize}$ (currently 177, derived from the game: setup mimics what the player sees, no cheating😄).
+- State $s \in \mathbb{R}^d$, where $d = \texttt{statesize}$ (currently 177 and roughly normalized, derived from the game: setup mimics what the player sees, no cheating😄).
 - Action $a \in 0, ..., A - 1$, $A = \texttt{actionsize}$ (currently 88: card types to play, special card targets, pass, skip redraw).
 - Legal mask $m(s) \in 0,1^A$: allowed actions
 - Reward $r_{t}$: functionality for reward shaping exists but only having +1/-1/-1 for W/D/L seemed to work the best.
@@ -125,7 +125,7 @@ Training follows a **curriculum**:
 
 As mentioned in **Setup**, the simple rewards: Win=1.0, Draw=-1.0, Loss=-1.0 got the best results for me.
 
-Training metrics are logged every 250 episodes to `metrics/training_metrics.csv` (overwritten each run) and to timestamped runs under `runs/` for TensorBoard. Every `EVALUATION_EVERY` episodes, greedy eval vs random and dummy is logged to TensorBoard (`evaluation/`), plus vs a frozen snapshot when one is at least `FROZEN_EVALUATION_LAG` episodes old.
+Training metrics are logged every 250 episodes to `metrics/training_metrics.csv` (overwritten each run) and to timestamped runs under `runs/` for TensorBoard. TensorBoard logs win rate and non-loss rate (win or draw), plus lower and upper 95% Wilson confidence-interval bounds as scalar lines. Its Custom Scalars tab combines each rate and its bounds into a single margin chart. Every `EVALUATION_EVERY` episodes, greedy evaluation against random and dummy opponents is logged to TensorBoard (`evaluation/`), plus a frozen snapshot when one is at least `FROZEN_EVALUATION_LAG` episodes old. Permanent anchor policies are saved at 25k, 50k, and each subsequent 100k episodes; at 50k and every 100k after that, the learner plays 2,000 evaluation matches against each earlier anchor.
 
 After ~500k episodes, the agent plays competently. It learns card synergies: using decoys on spies and medics, reviving spies, etc.  
 
@@ -267,10 +267,9 @@ Inactive shaping constants (`ROUND_WIN_REWARD`, `SCORE_DIFF_SCALE`, `CARD_PLAY_C
 | `EVAL_PARALLEL_ENVS`    | 128               | parallel eval matches              |
 | vs `random`             | 300 matches       | always                             |
 | vs `dummy`              | 300 matches       | always                             |
-| vs `frozen`             | 400 matches       | when an old enough snapshot exists |
-| Frozen fallback         | 700 dummy matches | if no eligible snapshot            |
-
-
+| vs `frozen`             | 300 matches       | when an old enough snapshot exists |
+| Anchor checkpoints      | 25k, 50k, then every 100k episodes | saved as `gwent_agent_<N>k.pth` |
+| Anchor evaluation       | 2,000 matches per earlier anchor | at 50k, then every 100k episodes |
 
 
 ### Logging & outputs
@@ -280,6 +279,7 @@ Inactive shaping constants (`ROUND_WIN_REWARD`, `SCORE_DIFF_SCALE`, `CARD_PLAY_C
 | ------------------------------ | ------------------------------------------------------------ |
 | `metrics/training_metrics.csv` | checkpoint metrics every 250 episodes (overwritten each run) |
 | `runs/<YYYYMMDD-HHMMSS>/`      | TensorBoard (training + eval)                                |
+| `models/gwent_agent_<N>k.pth`  | persistent anchor checkpoint at episode `<N>k`                |
 | `models/<model>.pth`           | final policy weights after training                          |
 
 

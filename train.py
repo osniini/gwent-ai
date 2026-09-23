@@ -7,17 +7,23 @@ from src.ai.curriculum import (
     begin_frozen_exploration,
     training_phase,
 )
-from src.ai.evaluation import evaluate_opponent
-from src.ai.metrics import TrainingMetricsLogger
+from src.ai.evaluation import (
+    DUMMY_EVALUATION_MATCHES,
+    FROZEN_EVALUATION_LAG,
+    FROZEN_EVALUATION_MATCHES,
+    RANDOM_EVALUATION_MATCHES,
+    AnchorPool,
+    evaluate_opponent,
+)
+from src.ai.metrics import TrainingMetricsLogger, format_result_rates
 from src.ai.opponents import LEARNER_PLAYER, dummy_action, random_action
 
-NUM_EPISODES = 500000 # Total number of episodes to train for
+NUM_EPISODES = 100000 # Total number of episodes to train for
 NUM_ENVS = 256 # Number of parallel environments to train on
 TRAIN_EVERY = 4 # Run train_step every N global steps
 TRAIN_STEPS_PER_UPDATE = 4 # Number of gradient steps per update
 TARGET_UPDATE_EVERY = 250 # Sync target net, log metrics, refresh frozen pool (every N completed episodes)
 EVALUATION_EVERY = 25000 # Evaluate every N episodes
-FROZEN_EVALUATION_LAG = 5000  # Eval vs newest snapshot saved at least N episodes ago
 
 def _learner_state(env: GwentEnv) -> np.ndarray:
     return env.get_state_for_player(LEARNER_PLAYER)
@@ -136,16 +142,16 @@ def _run_evaluation(
     episode: int,
 ) -> None:
     """Evaluate greedily without adding data to replay memory."""
-    benchmarks = [("random", 300, None), ("dummy", 300, None)]
+    benchmarks = [
+        ("random", RANDOM_EVALUATION_MATCHES, None),
+        ("dummy", DUMMY_EVALUATION_MATCHES, None),
+    ]
     frozen_opponent = frozen_pool.snapshot_episodes_ago(
         episode,
         FROZEN_EVALUATION_LAG,
     )
-    if frozen_opponent is None:
-        benchmarks[-1] = ("dummy", 700, None)
-        print("Evaluation: no frozen snapshot old enough; using 700 dummy matches.")
-    else:
-        benchmarks.append(("frozen", 400, frozen_opponent))
+    if frozen_opponent is not None:
+        benchmarks.append(("frozen", FROZEN_EVALUATION_MATCHES, frozen_opponent))
 
     for opponent, matches, opponent_net in benchmarks:
         results = evaluate_opponent(
@@ -159,12 +165,7 @@ def _run_evaluation(
             opponent=opponent,
             results=results,
         )
-        total = sum(results.values())
-        print(
-            f"  eval vs {opponent}: "
-            f"{results['wins'] / total:.1%} "
-            f"(W/L/D {results['wins']}/{results['losses']}/{results['draws']})"
-        )
+        print(f"  eval vs {opponent}: {format_result_rates(results)}")
 
 
 def train_gwent(
@@ -176,7 +177,10 @@ def train_gwent(
     sample_env = GwentEnv()
     agent = DQNAgent(sample_env.state_size, sample_env.action_size)
     frozen_pool = FrozenOpponentPool(agent)
-    metrics_logger = TrainingMetricsLogger()
+    anchor_pool = AnchorPool()
+    metrics_logger = TrainingMetricsLogger(
+        anchor_episodes=AnchorPool.anchor_episodes_up_to(num_episodes),
+    )
 
     # agent.load("models/gwent_agent_alpha.pth")
 
@@ -275,15 +279,11 @@ def train_gwent(
                 agent.update_target_network()
                 if training_phase(episodes_done, num_episodes) == "frozen":
                     frozen_pool.maybe_refresh(agent, episodes_done)
-                window_total = sum(window_results.values())
-                win_rate = window_results["wins"] / window_total if window_total else 0.0
                 print(
                     f"Episode {episodes_done}/{num_episodes} | "
                     f"phase: {training_phase(episodes_done, num_episodes)} | "
                     f"epsilon: {agent.epsilon:.3f} | "
-                    f"win rate: {win_rate:.1%} "
-                    f"(W/L/D {window_results['wins']}/"
-                    f"{window_results['losses']}/{window_results['draws']})"
+                    f"{format_result_rates(window_results)}"
                 )
                 averages: dict[str, float] = {}
                 if metric_count:
@@ -320,11 +320,21 @@ def train_gwent(
                     metrics_logger,
                     episodes_done,
                 )
+                if anchor_pool.is_evaluation_episode(episodes_done):
+                    for opponent, results in anchor_pool.evaluate(agent).items():
+                        metrics_logger.write_evaluation(
+                            episode=episodes_done,
+                            opponent=opponent,
+                            results=results,
+                        )
+                        print(f"  eval vs {opponent}: {format_result_rates(results)}")
+
+            if anchor_pool.is_anchor_episode(episodes_done):
+                anchor_pool.save(agent, episodes_done)
 
             if episodes_done < num_episodes:
                 _reset_tracker(tracker)
 
-    agent.save("models/gwent_agent_epsilon.pth")
     metrics_logger.close()
 
 
