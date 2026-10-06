@@ -129,9 +129,6 @@ Training metrics are logged every 250 episodes to `metrics/training_metrics.csv`
 
 After ~500k episodes, the agent plays competently. It learns card synergies: using decoys on spies and medics, reviving spies, etc.  
 
-![75% win rate vs dummy opponent](dummy_eval.png)
-*Win rate against the dummy opponent during 500k episode training.*
-
 ## Requirements
 
 - Python >= 3.12
@@ -177,7 +174,6 @@ When training finishes, policy weights are saved to [`models/<model>.pth`](train
 ```bash
 uv run tensorboard --logdir runs
 ```
-
 
 
 ## Project structure

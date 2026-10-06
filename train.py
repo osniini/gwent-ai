@@ -18,7 +18,7 @@ from src.ai.evaluation import (
 from src.ai.metrics import TrainingMetricsLogger, format_result_rates
 from src.ai.opponents import LEARNER_PLAYER, dummy_action, random_action
 
-NUM_EPISODES = 100000 # Total number of episodes to train for
+NUM_EPISODES = 500000 # Total number of episodes to train for
 NUM_ENVS = 256 # Number of parallel environments to train on
 TRAIN_EVERY = 4 # Run train_step every N global steps
 TRAIN_STEPS_PER_UPDATE = 4 # Number of gradient steps per update
