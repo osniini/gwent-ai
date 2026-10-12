@@ -194,7 +194,7 @@ class GwentApp(ctk.CTk):
             return
 
         state = self.env._get_state()
-        action = self.agent.select_action(state, legal, print_q_values=True)
+        action = self.agent.select_action(state, legal, print_q_values=False)
         self._apply_action(action)
 
     def _apply_action(self, action: int):
