@@ -5,7 +5,38 @@ import random
 import numpy as np
 from src.ai.model import DuelingQNetwork
 from src.ai.replay_buffer import ReplayBuffer
-from src.engine.gwent_env import GwentEnv
+from src.engine.card import CARD_CATALOG
+from src.engine.gwent_env import (
+    DECOY_ACTIONS,
+    GwentEnv,
+    HORN_ACTIONS,
+    MEDIC_ACTIONS,
+    MEDIC_NO_TARGET_ACTIONS,
+    PASS_ACTION,
+    REDRAW_DONE_ACTION,
+)
+
+
+def _action_info(action: int) -> tuple[str, str]:
+    if action < len(CARD_CATALOG):
+        card = CARD_CATALOG[action]
+        return card["name"], card.get("row") or card.get("weather_row") or "-"
+    if action == PASS_ACTION:
+        return "Pass", "-"
+    if action == REDRAW_DONE_ACTION:
+        return "Finish redraw", "-"
+    if action in HORN_ACTIONS.values():
+        return "Commander's Horn", next(row for row, value in HORN_ACTIONS.items() if value == action)
+    if action in DECOY_ACTIONS.values():
+        target = next(card for card, value in DECOY_ACTIONS.items() if value == action)
+        return f"Decoy → {CARD_CATALOG[target]['name']}", CARD_CATALOG[target]["row"]
+    if action in MEDIC_ACTIONS.values():
+        medic, target = next(pair for pair, value in MEDIC_ACTIONS.items() if value == action)
+        return f"{CARD_CATALOG[medic]['name']} → {CARD_CATALOG[target]['name']}", CARD_CATALOG[target]["row"]
+    medic = next((card for card, value in MEDIC_NO_TARGET_ACTIONS.items() if value == action), None)
+    if medic is not None:
+        return CARD_CATALOG[medic]["name"], CARD_CATALOG[medic]["row"]
+    return f"Action {action}", "-"
 
 class DQNAgent:
     def __init__(self, state_size: int, action_size: int, device: torch.device | None = None):
@@ -32,14 +63,26 @@ class DQNAgent:
         self.optimizer = optim.Adam(self.policy_net.parameters(), lr=self.learning_rate)
 
     
-    def select_action(self, state: np.ndarray, legal_actions: np.ndarray) -> int:
+    def select_action(
+        self,
+        state: np.ndarray,
+        legal_actions: np.ndarray,
+        *,
+        print_q_values: bool = False,
+    ) -> int:
         """Epsilon-greedy action selection."""
-        return self.select_actions_batch([state], [legal_actions])[0]
+        return self.select_actions_batch(
+            [state],
+            [legal_actions],
+            print_q_values=print_q_values,
+        )[0]
 
     def select_actions_batch(
         self,
         states: list[np.ndarray],
         legal_masks: list[np.ndarray],
+        *,
+        print_q_values: bool = False,
     ) -> list[int]:
         """Epsilon-greedy action selection for multiple envs in one forward pass."""
         n = len(states)
@@ -81,6 +124,12 @@ class DQNAgent:
 
         for j, i in enumerate(exploit_indices):
             actions[i] = int(best_actions[j])
+            if print_q_values:
+                print("\nAI Q-values:")
+                for action in np.flatnonzero(legal_masks[i]):
+                    name, row = _action_info(action)
+                    selected = " <- selected" if action == actions[i] else ""
+                    print(f"{name:30} {row:8} {q_values[j, action]:.5f}{selected}")
 
         return actions
 
